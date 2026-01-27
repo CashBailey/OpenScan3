@@ -2735,7 +2735,7 @@
         "type": "function",
         "z": "adfffc1feec47554",
         "name": "Route Cloud Action",
-        "func": "const baseUrl = global.get('baseUrl');\n\nif (msg.topic === 'update_cloud_setting') {\n    msg.url = `${baseUrl}/cloud/settings`;\n    msg.method = 'POST';\n    msg.payload = {\n        user: \"openscan\", \n        password: \"free\",  \n        token: msg.payload.token,\n        host: \"http://openscanfeedback.dnsuser.de:1334/\",\n        split_size: 200000000\n    };\n    return msg;\n}\n\nreturn null;",
+        "func": "const baseUrl = global.get('baseUrl');\n\nif (msg.topic === 'update_cloud_setting') {\n    msg.url = `${baseUrl}/cloud/settings`;\n    msg.method = 'POST';\n    msg.payload = {\n        user: \"openscan\", \n        password: \"free\",  \n        token: msg.payload.token,\n        host: \"https://openscanfeedback.dnsuser.de:1334/\",\n        split_size: 200000000\n    };\n    return msg;\n}\n\nreturn null;",
         "outputs": 1,
         "timeout": "",
         "noerr": 0,

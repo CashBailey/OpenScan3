@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import os
+from urllib.parse import urlparse
 from typing import Mapping
 
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, field_validator
 
 
-DEFAULT_CLOUD_HOST = "http://openscanfeedback.dnsuser.de:1334"
+DEFAULT_CLOUD_HOST = "https://openscanfeedback.dnsuser.de:1334"
 DEFAULT_SPLIT_SIZE = 200_000_000
 
 
@@ -18,7 +19,10 @@ class CloudSettings(BaseModel):
     user: str = Field(..., description="HTTP basic auth username for the cloud API.")
     password: str = Field(..., description="HTTP basic auth password for the cloud API.")
     token: str = Field(..., description="API token identifying the device or user.")
-    host: HttpUrl = Field(..., description="Base URL of the cloud service.")
+    host: HttpUrl = Field(
+        ...,
+        description="Base URL of the cloud service. HTTPS is required.",
+    )
     split_size: int = Field(
         DEFAULT_SPLIT_SIZE,
         ge=1,
@@ -26,6 +30,16 @@ class CloudSettings(BaseModel):
             "Maximum upload part size in bytes. The cloud currently accepts up to 200 MB per chunk."
         ),
     )
+
+    @field_validator("host")
+    @classmethod
+    def require_https_host(cls, value: HttpUrl) -> HttpUrl:
+        scheme = getattr(value, "scheme", None) or urlparse(str(value)).scheme
+        if scheme != "https":
+            raise ValueError(
+                "Cloud host must use HTTPS. Update OPENSCANCLOUD_HOST to an https:// URL."
+            )
+        return value
 
 
 class CloudConfigurationError(RuntimeError):

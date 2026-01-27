@@ -8,6 +8,7 @@ and their specific configurations.
 import json
 import logging
 import os
+import subprocess
 import pathlib
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -470,14 +471,14 @@ def reboot(with_saving = False):
     if with_saving:
         save_device_config()
     cleanup_and_exit()
-    os.system("sudo reboot")
+    subprocess.run(["sudo", "reboot"], check=False)
 
 
 def shutdown(with_saving = False):
     if with_saving:
         save_device_config()
     cleanup_and_exit()
-    os.system("sudo shutdown now")
+    subprocess.run(["sudo", "shutdown", "now"], check=False)
 
 
 def cleanup_and_exit():

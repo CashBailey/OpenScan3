@@ -7,6 +7,7 @@ import pathlib
 from dataclasses import dataclass
 from tempfile import TemporaryFile
 from typing import Any, BinaryIO, Iterator, Sequence
+from urllib.parse import urlparse
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import requests
@@ -78,6 +79,13 @@ def _cloud_request(
         request_params.update(params)
 
     base_url = str(settings.host).rstrip("/")
+    scheme = urlparse(base_url).scheme.lower()
+    if scheme != "https":
+        raise CloudServiceError(
+            "Cloud host must use HTTPS to protect credentials. "
+            "Update the cloud host (OPENSCANCLOUD_HOST or /cloud/settings) to an https:// URL "
+            f"(got '{scheme or 'unknown'}')."
+        )
     url = f"{base_url}/{path}"
     log_params = dict(request_params)
     if "token" in log_params:

@@ -4049,7 +4049,7 @@
             "minLength": 1,
             "format": "uri",
             "title": "Host",
-            "description": "Base URL of the cloud service."
+            "description": "Base URL of the cloud service. HTTPS is required."
           },
           "split_size": {
             "type": "integer",

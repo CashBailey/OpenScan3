@@ -250,6 +250,7 @@ class MotorController(StatefulHardware):
             target_angle: Target angular position in degrees"""
 
         logger.debug(f"Will move motor {self.model.name} to target angle: {target_angle}")
+        self._target_angle = target_angle
 
         spr = self.settings.steps_per_rotation
         direction = self.settings.direction

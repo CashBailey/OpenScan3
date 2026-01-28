@@ -72,6 +72,8 @@ _scanner_device = ScannerDevice(
     initialized=False,
 )
 
+_endstop_controllers: dict[str, EndstopController] = {}
+
 # Path to device configuration file (persisted)
 BASE_DIR = pathlib.Path(__file__).parent.parent.parent
 SETTINGS_DIR = resolve_settings_dir("device")
@@ -86,7 +88,7 @@ def load_device_config(config_file=None) -> dict:
                      If None, loads from device_config.json or default_minimal_config.json
 
     Returns:
-        bool: True if configuration was loaded successfully
+        dict: Loaded device configuration
     """
     # populate default config dictionary
     config_dict = _scanner_device.model_dump(mode='json')
@@ -159,7 +161,11 @@ def set_device_config(config_file) -> bool:
         bool: True if successful, False otherwise
     """
 
-    initialize(load_device_config(config_file))
+    try:
+        initialize(load_device_config(config_file))
+    except Exception as e:
+        logger.error("Failed to apply device configuration from %s: %s", config_file, e, exc_info=True)
+        return False
     return True
 
 
@@ -172,8 +178,8 @@ def get_device_info():
     """Get information about the device"""
     return {
         "name": _scanner_device.name,
-        "model": _scanner_device.model,
-        "shield": _scanner_device.shield,
+        "model": _scanner_device.model.value if _scanner_device.model else None,
+        "shield": _scanner_device.shield.value if _scanner_device.shield else None,
         "cameras": {name: controller.get_status() for name, controller in get_all_camera_controllers().items()},
         "motors": {name: controller.get_status() for name, controller in get_all_motor_controllers().items()},
         "lights": {name: controller.get_status() for name, controller in get_all_light_controllers().items()},
@@ -186,7 +192,7 @@ def _load_camera_config(settings: dict) -> CameraSettings:
         return CameraSettings(**settings)
     except Exception as e:
         # Return default settings if error occured
-        logger.error("Error loading camera settings: ", e)
+        logger.error("Error loading camera settings: %s", e, exc_info=True)
         return CameraSettings()
 
 
@@ -196,7 +202,7 @@ def _load_motor_config(settings: dict) -> MotorConfig:
         return MotorConfig(**settings)
     except Exception as e:
         # Return default settings if error occured
-        logger.error("Error loading motor settings: ", e)
+        logger.error("Error loading motor settings: %s", e, exc_info=True)
         return MotorConfig()
 
 
@@ -206,7 +212,7 @@ def _load_light_config(settings: dict) -> LightConfig:
         return LightConfig(**settings)
     except Exception as e:
         # Return default settings if error occured
-        logger.error("Error loading light settings: ", e)
+        logger.error("Error loading light settings: %s", e, exc_info=True)
         return LightConfig()
 
 
@@ -216,7 +222,7 @@ def _load_endstop_config(settings: dict) -> EndstopConfig:
         return EndstopConfig(**settings)
     except Exception as e:
         # Return default settings if error occured
-        logger.error("Error loading endstop settings: ", e)
+        logger.error("Error loading endstop settings: %s", e, exc_info=True)
         return EndstopConfig()
 
 
@@ -225,6 +231,17 @@ def _detect_cameras() -> Dict[str, Camera]:
     logger.debug("Loading cameras...")
 
     global _scanner_device
+
+    def _unique_camera_name(base_name: str | None) -> str:
+        name = base_name or "camera"
+        if name not in cameras:
+            return name
+        suffix = 2
+        while True:
+            candidate = f"{name}-{suffix}"
+            if candidate not in cameras:
+                return candidate
+            suffix += 1
 
     for camera_controller in get_all_camera_controllers():
         remove_camera_controller(camera_controller)
@@ -235,15 +252,21 @@ def _detect_cameras() -> Dict[str, Camera]:
     try:
         linuxpycameras = iter_video_capture_devices()
         for cam in linuxpycameras:
-            cam.open()
-            if cam.info.card not in ("unicam", "bcm2835-isp"):
-                cameras[cam.info.card] = Camera(
-                    type=CameraType.LINUXPY,
-                    name=cam.info.card,
-                    path=cam.filename,
-                    settings=None
-                )
-            cam.close()
+            try:
+                cam.open()
+                if cam.info.card not in ("unicam", "bcm2835-isp"):
+                    cam_name = _unique_camera_name(cam.info.card)
+                    cameras[cam_name] = Camera(
+                        type=CameraType.LINUXPY,
+                        name=cam_name,
+                        path=cam.filename,
+                        settings=None
+                    )
+            finally:
+                try:
+                    cam.close()
+                except Exception:
+                    logger.debug("Failed to close Linux camera handle for %s", getattr(cam, "filename", "?"))
     except Exception as e:
         logger.error(f"Error loading Linux cameras: {e}")
 
@@ -251,9 +274,10 @@ def _detect_cameras() -> Dict[str, Camera]:
     try:
         gphoto2_cameras = gp.Camera.autodetect()
         for c in gphoto2_cameras:
-            cameras[c[0]] = Camera(
+            cam_name = _unique_camera_name(c[0])
+            cameras[cam_name] = Camera(
                 type=CameraType.GPHOTO2,
-                name=c[0],
+                name=cam_name,
                 path=c[1],
                 settings=None
             )
@@ -266,15 +290,20 @@ def _detect_cameras() -> Dict[str, Camera]:
             from picamera2 import Picamera2
 
             picam = Picamera2()
-            picam_name = picam.camera_properties.get("Model")
-            cameras[picam_name] = Camera(
-                type=CameraType.PICAMERA2,
-                name=picam_name,
-                path="/dev/video0" + str(picam.camera_properties.get("Location")),
-                settings=CameraSettings()
-            )
-            picam.close()
-            del picam
+            try:
+                picam_name = picam.camera_properties.get("Model")
+                cam_name = _unique_camera_name(picam_name)
+                cameras[cam_name] = Camera(
+                    type=CameraType.PICAMERA2,
+                    name=cam_name,
+                    path="/dev/video0" + str(picam.camera_properties.get("Location")),
+                    settings=CameraSettings()
+                )
+            finally:
+                try:
+                    picam.close()
+                finally:
+                    del picam
         except IndexError as e:
             logger.critical(
                 "Error loading Picamera2, most likely because of incorrect dtoverlay in /boot/firmware/config.txt.",
@@ -287,52 +316,87 @@ def _detect_cameras() -> Dict[str, Camera]:
     return cameras
 
 
-def initialize(config: dict = _scanner_device.model_dump(mode='json'), detect_cameras = False):
+def initialize(config: dict | None = None, detect_cameras = False):
     """Detect and load hardware components"""
     global _scanner_device
     # Load environment variables
     load_dotenv()
+    if config is None:
+        config = _scanner_device.model_dump(mode='json')
+    config = config or {}
+    config_cameras = config.get("cameras") or {}
+    config_motors = config.get("motors") or {}
+    config_lights = config.get("lights") or {}
+    config_endstops = config.get("endstops") or {}
+    if not isinstance(config_cameras, dict):
+        logger.warning("Invalid cameras config; expected dict, got %s", type(config_cameras).__name__)
+        config_cameras = {}
+    if not isinstance(config_motors, dict):
+        logger.warning("Invalid motors config; expected dict, got %s", type(config_motors).__name__)
+        config_motors = {}
+    if not isinstance(config_lights, dict):
+        logger.warning("Invalid lights config; expected dict, got %s", type(config_lights).__name__)
+        config_lights = {}
+    if not isinstance(config_endstops, dict):
+        logger.warning("Invalid endstops config; expected dict, got %s", type(config_endstops).__name__)
+        config_endstops = {}
 
     # if already initialized, remove all controllers for reinitializing
     if _scanner_device.initialized:
         logger.debug("Hardware already initialized. Cleaning up old controllers.")
-        for controller in get_all_motor_controllers():
-            remove_motor_controller(controller)
-        for controller in get_all_light_controllers():
-            remove_light_controller(controller)
-        for controller in get_all_camera_controllers():
-            remove_camera_controller(controller)
+        for name in list(get_all_motor_controllers().keys()):
+            remove_motor_controller(name)
+        for name in list(get_all_light_controllers().keys()):
+            remove_light_controller(name)
+        for name in list(get_all_camera_controllers().keys()):
+            remove_camera_controller(name)
+        for name, endstop_controller in list(_endstop_controllers.items()):
+            try:
+                endstop_controller.cleanup()
+            except Exception as e:
+                logger.error("Error cleaning up endstop '%s': %s", name, e)
+            _endstop_controllers.pop(name, None)
         cleanup_all_pins()
         logger.debug("Cleaned up old controllers.")
 
     # Detect hardware
-    if detect_cameras or config["cameras"] == {}:
+    if detect_cameras or not config_cameras:
         camera_objects = _detect_cameras()
     else:
         camera_objects = {}
-        for cam_name in config["cameras"]:
+        for cam_name, cam_data in config_cameras.items():
+            if not isinstance(cam_data, dict):
+                logger.warning("Skipping camera '%s': invalid config entry.", cam_name)
+                continue
+            try:
+                cam_type = CameraType(cam_data.get("type"))
+            except Exception:
+                logger.warning("Skipping camera '%s': invalid type '%s'.", cam_name, cam_data.get("type"))
+                continue
             camera = Camera(
                 name=cam_name,
-                type=CameraType(config["cameras"][cam_name]["type"]),
-                path=config["cameras"][cam_name]["path"],
-                settings=_load_camera_config(config["cameras"][cam_name]["settings"])
+                type=cam_type,
+                path=cam_data.get("path", ""),
+                settings=_load_camera_config(cam_data.get("settings") or {})
             )
             camera_objects[cam_name] = camera
 
     # Create motor objects
     motor_objects = {}
-    for motor_name in config["motors"]:
-        motor = Motor(name=motor_name,
-        settings=_load_motor_config(config["motors"][motor_name]))
+    for motor_name, motor_settings in config_motors.items():
+        motor = Motor(
+            name=motor_name,
+            settings=_load_motor_config(motor_settings or {}),
+        )
         motor_objects[motor_name] = motor
         logger.debug(f"Loaded motor {motor_name} with settings: {motor.settings}")
 
     # Create light objects
     light_objects = {}
-    for light_name in config["lights"]:
+    for light_name, light_settings in config_lights.items():
         light = Light(
             name=light_name,
-            settings=_load_light_config(config["lights"][light_name])
+            settings=_load_light_config(light_settings or {})
         )
         light_objects[light_name] = light
         logger.debug(f"Loaded light {light_name} with settings: {light.settings}")
@@ -387,20 +451,20 @@ def initialize(config: dict = _scanner_device.model_dump(mode='json'), detect_ca
 
     # Create endstop objects
     endstop_objects = {}
-    if "endstops" in config:
-        for endstop_name in config["endstops"]:
-            try:
-                settings = _load_endstop_config(config["endstops"][endstop_name]["settings"])
-                endstop = Endstop(name=endstop_name, settings=settings)
-                controller = get_motor_controller(settings.motor_name)
-                if not controller:
-                    raise ValueError(f"Motor '{settings.motor_name}' not found for endstop '{endstop_name}'")
-                endstop_controller = EndstopController(endstop, controller=controller)
-                endstop_objects[endstop_name] = endstop
-                logging.debug(f"Loaded endstop {endstop_name} with settings: {endstop.settings}")
-                endstop_controller.start_listener()
-            except Exception as e:
-                logger.error(f"Error initializing endstop '{endstop_name}': {e}")
+    for endstop_name, endstop_data in config_endstops.items():
+        try:
+            settings = _load_endstop_config((endstop_data or {}).get("settings") or {})
+            endstop = Endstop(name=endstop_name, settings=settings)
+            controller = get_motor_controller(settings.motor_name)
+            if not controller:
+                raise ValueError(f"Motor '{settings.motor_name}' not found for endstop '{endstop_name}'")
+            endstop_controller = EndstopController(endstop, controller=controller)
+            endstop_objects[endstop_name] = endstop
+            _endstop_controllers[endstop_name] = endstop_controller
+            logger.debug(f"Loaded endstop {endstop_name} with settings: {endstop.settings}")
+            endstop_controller.start_listener()
+        except Exception as e:
+            logger.error(f"Error initializing endstop '{endstop_name}': {e}")
 
 
     for name, light in light_objects.items():
@@ -417,12 +481,31 @@ def initialize(config: dict = _scanner_device.model_dump(mode='json'), detect_ca
 
     # turn on lights
     for _, controller in get_all_light_controllers().items():
-        controller.turn_on()
+        try:
+            controller.turn_on()
+        except Exception as e:
+            controller_name = getattr(getattr(controller, "model", None), "name", "<unknown>")
+            logger.error("Error turning on light '%s': %s", controller_name, e)
+
+    model_value = config.get("model")
+    shield_value = config.get("shield")
+    model = None
+    shield = None
+    if model_value:
+        try:
+            model = ScannerModel(model_value)
+        except Exception:
+            logger.warning("Invalid scanner model '%s'; defaulting to None.", model_value)
+    if shield_value:
+        try:
+            shield = ScannerShield(shield_value)
+        except Exception:
+            logger.warning("Invalid scanner shield '%s'; defaulting to None.", shield_value)
 
     _scanner_device = ScannerDevice(
-        name=config["name"],
-        model=ScannerModel(config.get("model")) if config.get("model") else None,
-        shield=ScannerShield(config.get("shield")) if config.get("shield") else None,
+        name=config.get("name", _scanner_device.name),
+        model=model,
+        shield=shield,
         cameras=camera_objects,
         motors=motor_objects,
         lights=light_objects,
@@ -489,6 +572,14 @@ def cleanup_and_exit():
             logger.debug(f"Camera controller '{name}' closed successfully.")
         except Exception as e:
             logger.error(f"Error closing camera controller '{name}': {e}")
+
+    for name, endstop_controller in list(_endstop_controllers.items()):
+        try:
+            endstop_controller.cleanup()
+            logger.debug("Endstop controller '%s' closed successfully.", name)
+        except Exception as e:
+            logger.error("Error closing endstop controller '%s': %s", name, e)
+        _endstop_controllers.pop(name, None)
 
     cleanup_all_pins()
     logger.info("Exiting now...")

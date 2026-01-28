@@ -47,6 +47,7 @@ class EndstopController:
         self._pin = endstop.settings.pin
         self._event_queue = Queue(maxsize=10)  # Create a queue for this instance
         self._listener_task = None  # To hold the reference to the listener task
+        self._loop = None
 
         initialize_button(self._pin, pull_up=self.settings.pull_up, bounce_time=self.settings.bounce_time)
         register_button_callback(self._pin, "when_released", self._gpio_callback)
@@ -87,10 +88,33 @@ class EndstopController:
         Returns:
             dict: A dictionary containing the status of the endstop.
         """
-        return {"assigned_motor": self.settings.motor_name,
-                "position": self.settings.angular_position,
-                "pin": self.settings.pin,
-                "is_pressed": not is_button_pressed(self.settings.pin)}
+        pressed = is_button_pressed(self.settings.pin)
+        if pressed is None:
+            is_pressed = None
+        else:
+            is_pressed = not pressed
+
+        return {
+            "assigned_motor": self.settings.motor_name,
+            "position": self.settings.angular_position,
+            "pin": self.settings.pin,
+            "is_pressed": is_pressed,
+        }
+
+    def cleanup(self):
+        """Stop listeners and unregister callbacks for this endstop."""
+        try:
+            self.stop_listener()
+        except Exception as exc:
+            logger.debug("Endstop listener stop raised for %s: %s", self.model.name, exc)
+
+        try:
+            remove_button_callback(self._pin, "when_released")
+        except Exception as exc:
+            logger.debug("Endstop callback removal raised for %s: %s", self.model.name, exc)
+
+        if self._motor_controller.endstop is self:
+            self._motor_controller.endstop = None
 
 
     async def _move_back_task(self):
@@ -109,14 +133,20 @@ class EndstopController:
         Immediate, synchronous callback executed by gpiozero in its thread.
         Only put a marker event into the queue, do not block or call async functions.
         """
+        if not self._loop:
+            logger.warning("Endstop event received before listener was started; dropping event.")
+            return
+        self._loop.call_soon_threadsafe(self._enqueue_event, "pressed")
+
+    def _enqueue_event(self, event: str):
         try:
-             # Put a simple marker event into the queue
-             self._event_queue.put_nowait("pressed")
-             logger.debug(f"Endstop '{self.model.name}' raw press detected on pin {self._pin}. Event queued.")
+            # Put a simple marker event into the queue
+            self._event_queue.put_nowait(event)
+            logger.debug(f"Endstop '{self.model.name}' raw press detected on pin {self._pin}. Event queued.")
         except asyncio.QueueFull:
-             logger.warning(f"Endstop for motor '{self.settings.motor_name}' event queue is full. Event dropped.")
+            logger.warning(f"Endstop for motor '{self.settings.motor_name}' event queue is full. Event dropped.")
         except Exception as e:
-             logger.error(f"Error in endstop GPIO callback for pin {self._pin}: {e}", exc_info=True)
+            logger.error(f"Error in endstop GPIO callback for pin {self._pin}: {e}", exc_info=True)
 
 
     async def _process_events(self):
@@ -128,29 +158,30 @@ class EndstopController:
              try:
                   event = await self._event_queue.get()
 
-                  if event == "pressed":
-                       logger.info(f"Endstop '{self.model.name}' triggered. "
-                                   f"Stopping motor '{self.settings.motor_name}' and moving back...")
+                  try:
+                       if event == "pressed":
+                            logger.info(f"Endstop '{self.model.name}' triggered. "
+                                        f"Stopping motor '{self.settings.motor_name}' and moving back...")
 
-                       # 1. Stop the motor immediately (this should be thread-safe)
-                       self._motor_controller.stop()
-                       await asyncio.sleep(0.1)
-                       logger.debug(f"Endstop {self.model.name} stopped motor '{self.settings.motor_name}'.")
+                            # 1. Stop the motor immediately (this should be thread-safe)
+                            self._motor_controller.stop()
+                            await asyncio.sleep(0.1)
+                            logger.debug(f"Endstop {self.model.name} stopped motor '{self.settings.motor_name}'.")
 
-                       # 2. Set motor position to the defined endstop angle
-                       self._motor_controller.model.angle = self.settings.angular_position
-                       # Also reset internal motor state
-                       self._motor_controller._target_angle = None # Clear target
-                       logger.debug(f"Endstop {self.model.name} set motor '{self.settings.motor_name}' position to {self.settings.angular_position} degrees.")
+                            # 2. Set motor position to the defined endstop angle
+                            self._motor_controller.model.angle = self.settings.angular_position
+                            # Also reset internal motor state
+                            self._motor_controller._target_angle = None # Clear target
+                            logger.debug(f"Endstop {self.model.name} set motor '{self.settings.motor_name}' position to {self.settings.angular_position} degrees.")
 
-                       # 3. Move back slightly (asynchronously)
-                       # Small delay before moving back, allows system to settle
-                       await asyncio.sleep(0.1)
-                       await self._motor_controller.move_degrees(-2)
-                       logger.debug(f"Endstop {self.model.name} moved motor '{self.settings.motor_name}' back by 2 degrees.")
-
-                  # Mark the task as done
-                  self._event_queue.task_done()
+                            # 3. Move back slightly (asynchronously)
+                            # Small delay before moving back, allows system to settle
+                            await asyncio.sleep(0.1)
+                            await self._motor_controller.move_degrees(-2)
+                            logger.debug(f"Endstop {self.model.name} moved motor '{self.settings.motor_name}' back by 2 degrees.")
+                  finally:
+                       # Mark the task as done
+                       self._event_queue.task_done()
 
              except asyncio.CancelledError:
                   logger.error("Event processor for Endstop cancelled.")
@@ -171,6 +202,7 @@ class EndstopController:
         """
         if self._listener_task is None or self._listener_task.done():
              logger.debug(f"Starting event listener for Endstop '{self.settings.motor_name}'...")
+             self._loop = asyncio.get_running_loop()
              self._listener_task = asyncio.create_task(self._process_events())
              return self._listener_task
         else:

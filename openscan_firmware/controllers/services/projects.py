@@ -628,15 +628,32 @@ class ProjectManager:
     def delete_photos(self, scan: Scan, photo_filenames: list[str]) -> bool:
         """Delete one or more photos from a scan in a project"""
         try:
+            project = self._projects.get(scan.project_name)
+            if project is None:
+                raise ValueError(f"Project '{scan.project_name}' not found")
             scan_id = f"scan{scan.index:02d}"
-            photo_path = os.path.join(scan.project_name, scan_id)
+            photo_dir = pathlib.Path(project.path) / scan_id
+            photo_dir_resolved = photo_dir.resolve()
+            if not photo_dir_resolved.exists():
+                logger.warning("Scan directory does not exist: %s", photo_dir_resolved)
+                return False
 
+            deleted = 0
             for photo_filename in photo_filenames:
-                photo_path = os.path.join(photo_path, photo_filename)
-                if os.path.exists(photo_path):
-                    os.remove(photo_path)
+                candidate = (photo_dir / photo_filename).resolve()
+                if not candidate.is_relative_to(photo_dir_resolved):
+                    logger.warning("Skipping unsafe photo path: %s", photo_filename)
+                    continue
+                if candidate.exists():
+                    candidate.unlink()
+                    deleted += 1
 
-            logger.info(f"Deleted photo {photo_path} from scan {scan_id} in project {scan.project_name}")
+            logger.info(
+                "Deleted %s photos from scan %s in project %s",
+                deleted,
+                scan_id,
+                scan.project_name,
+            )
 
             return True
         except Exception as e:

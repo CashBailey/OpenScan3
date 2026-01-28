@@ -87,10 +87,18 @@ def initialize_button(pin: int, pull_up: Optional[bool] = True, bounce_time: Opt
                 del _buttons[pin]
 
 
+def _normalize_button_event_type(event_type: str) -> Optional[str]:
+    if event_type in ("pressed", "when_pressed"):
+        return "when_pressed"
+    if event_type in ("released", "when_released"):
+        return "when_released"
+    return None
+
+
 def register_button_callback(pin: int, event_type: str, callback: Callable[[], None]):
     """
-    Registers a callback function for a button event ('pressed' or 'released').
-    The pin must be initialized as a button first using initialize_buttons.
+    Registers a callback function for a button event ('pressed'/'released' or 'when_pressed'/'when_released').
+    The pin must be initialized as a button first using initialize_button().
 
     Args:
         pin: The GPIO pin number of the button.
@@ -98,18 +106,22 @@ def register_button_callback(pin: int, event_type: str, callback: Callable[[], N
         callback: The function to call when the event occurs (takes no arguments).
     """
     if pin not in _buttons:
-        logger.error(f"Error: Button on pin {pin} not initialized. Call initialize_buttons() first.")
+        logger.error(f"Error: Button on pin {pin} not initialized. Call initialize_button() first.")
         return
 
     button_obj = _buttons[pin]
-    if event_type == 'when_pressed':
+    normalized_event = _normalize_button_event_type(event_type)
+    if normalized_event == "when_pressed":
         button_obj.when_pressed = callback
         logger.debug(f"Registered 'when_pressed' callback for button on pin {pin}.")
-    elif event_type == 'when_released':
+    elif normalized_event == "when_released":
         button_obj.when_released = callback
         logger.debug(f"Registered 'when_released' callback for button on pin {pin}.")
     else:
-        logger.error(f"Error: Invalid event_type '{event_type}'. Use 'pressed' or 'released'.")
+        logger.error(
+            f"Error: Invalid event_type '{event_type}'. "
+            "Use 'pressed'/'released' or 'when_pressed'/'when_released'."
+        )
 
 
 def remove_button_callback(pin: int, event_type: str):
@@ -125,20 +137,24 @@ def remove_button_callback(pin: int, event_type: str):
         return
 
     button_obj = _buttons[pin]
-    if event_type == 'when_pressed':
+    normalized_event = _normalize_button_event_type(event_type)
+    if normalized_event == "when_pressed":
         if button_obj.when_pressed is None:
              logger.warning(f"Warning: No 'when_pressed' callback was registered for button on pin {pin}.")
         else:
             button_obj.when_pressed = None
             logger.debug(f"Removed 'when_pressed' callback for button on pin {pin}.")
-    elif event_type == 'when_released':
+    elif normalized_event == "when_released":
         if button_obj.when_released is None:
              logger.warning(f"Warning: No 'when_released' callback was registered for button on pin {pin}.")
         else:
             button_obj.when_released = None
             logger.debug(f"Removed 'when_released' callback for button on pin {pin}.")
     else:
-        logger.error(f"Error: Invalid event_type '{event_type}'. Use 'pressed' or 'released'.")
+        logger.error(
+            f"Error: Invalid event_type '{event_type}'. "
+            "Use 'pressed'/'released' or 'when_pressed'/'when_released'."
+        )
 
 
 def is_button_pressed(pin: int) -> Optional[bool]:

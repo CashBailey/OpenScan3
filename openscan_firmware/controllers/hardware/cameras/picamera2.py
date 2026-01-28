@@ -195,26 +195,26 @@ class Picamera2Controller(CameraController):
     def _apply_settings_to_hardware(self, settings: CameraSettings):
         """This method is call on every change of settings."""
         self._set_busy(True)
-        
-        # apply all settings
-        for setting, value in settings.__dict__.items():
-            if setting in self.control_mapping:
-                self._picam.set_controls({self.control_mapping[setting]: value})
+        try:
+            # apply all settings
+            for setting, value in settings.__dict__.items():
+                if setting in self.control_mapping:
+                    self._picam.set_controls({self.control_mapping[setting]: value})
 
-        # apply shutter
-        if settings.shutter is not None:
-            self._picam.set_controls({'ExposureTime': int(settings.shutter * 1000)})
+            # apply shutter
+            if settings.shutter is not None:
+                self._picam.set_controls({'ExposureTime': int(settings.shutter * 1000)})
 
-        # handle ColourGains (AWB gains) separately
-        red_gain = getattr(settings, 'awbg_red')
-        blue_gain = getattr(settings, 'awbg_blue')
-        if red_gain is not None and blue_gain is not None:
-            self._picam.set_controls({'ColourGains': (red_gain, blue_gain)})
+            # handle ColourGains (AWB gains) separately
+            red_gain = getattr(settings, 'awbg_red')
+            blue_gain = getattr(settings, 'awbg_blue')
+            if red_gain is not None and blue_gain is not None:
+                self._picam.set_controls({'ColourGains': (red_gain, blue_gain)})
 
-        self._configure_focus(camera_mode="preview")  
-
-        self._set_busy(False)
-        logger.debug(f"Applied settings to hardware: {settings.model_dump_json()}")
+            self._configure_focus(camera_mode="preview")
+            logger.debug(f"Applied settings to hardware: {settings.model_dump_json()}")
+        finally:
+            self._set_busy(False)
 
 
     def _configure_resolutions(self, additional_settings=None):
@@ -272,7 +272,7 @@ class Picamera2Controller(CameraController):
         y_start = (full_y - height) // 2
 
         update_controls = {"ScalerCrop": (x_start, y_start, width, height)}
-        logger.debug("Updated ScalerCrop: ", update_controls)
+        logger.debug("Updated ScalerCrop: %s", update_controls)
         self.photo_config = self._strategy.create_photo_config(self._picam, (width, height), update_controls)
         self.raw_config = self._strategy.create_raw_config(self._picam, (width, height), update_controls)
 
@@ -355,59 +355,60 @@ class Picamera2Controller(CameraController):
             tuple: A tuple containing the red and blue gains.
         """
         self._set_busy(True)
-        logger.info("Will configure automatic white balance for color correction...")
-        logger.debug(
-            f"Warmup frames: {warmup_frames}, Stable frames: {stable_frames}, Epsilon: {eps}, Timeout: {timeout_s}")
-        logger.debug(f"Current camera metadata: {self._picam.capture_metadata()}")
+        try:
+            logger.info("Will configure automatic white balance for color correction...")
+            logger.debug(
+                f"Warmup frames: {warmup_frames}, Stable frames: {stable_frames}, Epsilon: {eps}, Timeout: {timeout_s}")
+            logger.debug(f"Current camera metadata: {self._picam.capture_metadata()}")
 
-        self._picam.set_controls({"AwbEnable": True})
+            self._picam.set_controls({"AwbEnable": True})
 
-        metadata = self._picam.capture_metadata()
-        current_controls = {c: metadata[c] for c in ["ExposureTime", "ColourGains"]}
-        logger.info(f"Current Exposure {current_controls['ExposureTime']}, ColourGains {current_controls['ColourGains']}")
+            metadata = self._picam.capture_metadata()
+            current_controls = {c: metadata[c] for c in ["ExposureTime", "ColourGains"]}
+            logger.info(f"Current Exposure {current_controls['ExposureTime']}, ColourGains {current_controls['ColourGains']}")
 
-        self._picam.drop_frames(warmup_frames, wait=True)
+            self._picam.drop_frames(warmup_frames, wait=True)
 
-        last = None
-        steady = 0
-        best_gains = None
-        t0 = time.monotonic()
+            last = None
+            steady = 0
+            best_gains = None
+            t0 = time.monotonic()
 
-        while time.monotonic() - t0 < timeout_s:
-            md = self._picam.capture_metadata()
-            gains = md.get("ColourGains")
-            if not gains:
-                continue
+            while time.monotonic() - t0 < timeout_s:
+                md = self._picam.capture_metadata()
+                gains = md.get("ColourGains")
+                if not gains:
+                    continue
 
-            if last is not None:
-                dr = abs(gains[0] - last[0])
-                db = abs(gains[1] - last[1])
-                if dr < eps and db < eps:
-                    steady += 1
-                else:
-                    steady = 0
-            last = gains
-            best_gains = gains
+                if last is not None:
+                    dr = abs(gains[0] - last[0])
+                    db = abs(gains[1] - last[1])
+                    if dr < eps and db < eps:
+                        steady += 1
+                    else:
+                        steady = 0
+                last = gains
+                best_gains = gains
 
-            if steady >= stable_frames:
-                break
+                if steady >= stable_frames:
+                    break
 
-        if best_gains is None:
-            logger.error("Could not determine gains from metadata.")
-            raise RuntimeError("Could not determine gains from metadata.")
+            if best_gains is None:
+                logger.error("Could not determine gains from metadata.")
+                raise RuntimeError("Could not determine gains from metadata.")
 
-        # Disable AWB and lock the gains
-        self._picam.set_controls({
-            "AwbEnable": False,
-            "ColourGains": (float(best_gains[0]), float(best_gains[1]))
-        })
-        self.settings.awbg_red = best_gains[0]
-        self.settings.awbg_blue = best_gains[1]
-        logger.info(f"AWB locked with gains: {best_gains}")
+            # Disable AWB and lock the gains
+            self._picam.set_controls({
+                "AwbEnable": False,
+                "ColourGains": (float(best_gains[0]), float(best_gains[1]))
+            })
+            self.settings.awbg_red = best_gains[0]
+            self.settings.awbg_blue = best_gains[1]
+            logger.info(f"AWB locked with gains: {best_gains}")
 
-        self._set_busy(False)
-
-        return float(best_gains[0]), float(best_gains[1])
+            return float(best_gains[0]), float(best_gains[1])
+        finally:
+            self._set_busy(False)
 
     def restart_camera(self):
         """Restart the camera and reconfigure resolution."""
@@ -445,12 +446,15 @@ class Picamera2Controller(CameraController):
                         time.sleep(backoff)
                         continue
                     break
-        except:
-            # All attempts failed; re-raise the last exception for upstream handling
-            raise last_exc
+            if last_exc is not None:
+                raise last_exc
+            raise RuntimeError("_capture_array failed without raising an exception.")
         finally:
             # Always switch back to preview focus and clear busy flag
-            self._configure_focus(camera_mode="preview")
+            try:
+                self._configure_focus(camera_mode="preview")
+            except Exception as exc:
+                logger.warning("Failed to restore preview focus: %s", exc)
             self._set_busy(False)
 
 
@@ -502,39 +506,43 @@ class Picamera2Controller(CameraController):
         Returns:
             tuple[BytesIO, dict]: A tuple containing the JPEG data and metadata."""
         self._set_busy(True)
-        self._configure_focus(camera_mode="photo")
-        self._configure_cropping_for_scalercrop()
-        if self.settings.AF:
-            self._picam.autofocus_cycle()
+        try:
+            self._configure_focus(camera_mode="photo")
+            self._configure_cropping_for_scalercrop()
+            if self.settings.AF:
+                self._picam.autofocus_cycle()
 
-        self._picam.options["quality"] = self.settings.jpeg_quality
+            self._picam.options["quality"] = self.settings.jpeg_quality
 
-        exif_data = {
-            "0th": {
-                piexif.ImageIFD.Orientation: self.settings.orientation_flag,
-                # piexif.ImageIFD.Make: "Raspberry Pi",
-                piexif.ImageIFD.Model: self.camera.name,
-                piexif.ImageIFD.Software: "OpenScan3 (Picamera2)",
+            exif_data = {
+                "0th": {
+                    piexif.ImageIFD.Orientation: self.settings.orientation_flag,
+                    # piexif.ImageIFD.Make: "Raspberry Pi",
+                    piexif.ImageIFD.Model: self.camera.name,
+                    piexif.ImageIFD.Software: "OpenScan3 (Picamera2)",
+                }
             }
-        }
 
-        if optional_exif_data:
-            exif_data.update(optional_exif_data)
+            if optional_exif_data:
+                exif_data.update(optional_exif_data)
 
-        jpeg_data = io.BytesIO()
-        cam_metadata = self._picam.switch_mode_and_capture_file(self.photo_config,
-                                                            jpeg_data,
-                                                            #delay=5,
-                                                            format='jpeg',
-                                                            exif_data=exif_data)
+            jpeg_data = io.BytesIO()
+            cam_metadata = self._picam.switch_mode_and_capture_file(
+                self.photo_config,
+                jpeg_data,
+                # delay=5,
+                format='jpeg',
+                exif_data=exif_data,
+            )
 
-        self._configure_focus(camera_mode="preview")
-
-        logger.debug(f"Captured jpeg with metadata: {cam_metadata}")
-
-        self._set_busy(False)
-
-        return self._create_artifact(jpeg_data, "jpeg", cam_metadata)
+            logger.debug(f"Captured jpeg with metadata: {cam_metadata}")
+            return self._create_artifact(jpeg_data, "jpeg", cam_metadata)
+        finally:
+            try:
+                self._configure_focus(camera_mode="preview")
+            except Exception as exc:
+                logger.warning("Failed to restore preview focus: %s", exc)
+            self._set_busy(False)
 
 
     def capture_dng(self) -> PhotoData:
@@ -543,23 +551,27 @@ class Picamera2Controller(CameraController):
         Returns:
             tuple[BytesIO, Any]: A tuple containing the dng data and metadata."""
         self._set_busy(True)
-        self._configure_focus(camera_mode="photo")
-        self._picam.set_controls({"ScalerCrop": self._configure_cropping_for_scalercrop()})
-        if self.settings.AF:
-            self._picam.autofocus_cycle()
+        try:
+            self._configure_focus(camera_mode="photo")
+            self._picam.set_controls({"ScalerCrop": self._configure_cropping_for_scalercrop()})
+            if self.settings.AF:
+                self._picam.autofocus_cycle()
 
-        dng_data = io.BytesIO()
-        camera_metadata = self._picam.switch_mode_and_capture_file(self.raw_config,
-                                                            dng_data,
-                                                            name='raw')
+            dng_data = io.BytesIO()
+            camera_metadata = self._picam.switch_mode_and_capture_file(
+                self.raw_config,
+                dng_data,
+                name='raw',
+            )
 
-        self._configure_focus(camera_mode="preview")
-
-        logger.debug(f"Captured dng with metadata: {metadata}")
-
-        self._set_busy(False)
-
-        return self._create_artifact(dng_data, "dng", camera_metadata)
+            logger.debug("Captured dng with metadata: %s", camera_metadata)
+            return self._create_artifact(dng_data, "dng", camera_metadata)
+        finally:
+            try:
+                self._configure_focus(camera_mode="preview")
+            except Exception as exc:
+                logger.warning("Failed to restore preview focus: %s", exc)
+            self._set_busy(False)
 
     def _prepare_metadata(self, raw_metadata) -> CameraMetadata:
         """Prepare metadata for photo artifact.
@@ -603,26 +615,28 @@ class Picamera2Controller(CameraController):
             raise RuntimeError("Picamera2 controller is not available")
 
         self._set_busy(True)
-        frame = self._picam.capture_array(mode)
+        try:
+            frame = self._picam.capture_array(mode)
 
-        if mode == "lores":
-            frame = cv2.cvtColor(frame, cv2.COLOR_YUV420p2RGB)
-            frame = apply_gamma_correction(frame, gamma=2.2)
-        elif mode == "main":
-            frame = cv2.resize(frame, (640, 480))
-            frame = self._strategy.process_preview_frame(frame)
+            if mode == "lores":
+                frame = cv2.cvtColor(frame, cv2.COLOR_YUV420p2RGB)
+                frame = apply_gamma_correction(frame, gamma=2.2)
+            elif mode == "main":
+                frame = cv2.resize(frame, (640, 480))
+                frame = self._strategy.process_preview_frame(frame)
 
-        rotate_map = {
-            1: lambda f: f,
-            3: lambda f: cv2.rotate(f, cv2.ROTATE_180),
-            6: lambda f: cv2.rotate(f, cv2.ROTATE_90_CLOCKWISE),
-            8: lambda f: cv2.rotate(f, cv2.ROTATE_90_COUNTERCLOCKWISE),
-        }
-        #frame = rotate_map.get(self.settings.orientation_flag, lambda f: f)(frame)
+            rotate_map = {
+                1: lambda f: f,
+                3: lambda f: cv2.rotate(f, cv2.ROTATE_180),
+                6: lambda f: cv2.rotate(f, cv2.ROTATE_90_CLOCKWISE),
+                8: lambda f: cv2.rotate(f, cv2.ROTATE_90_COUNTERCLOCKWISE),
+            }
+            #frame = rotate_map.get(self.settings.orientation_flag, lambda f: f)(frame)
 
-        _, jpeg = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
-        self._set_busy(False)
-        return jpeg.tobytes()
+            _, jpeg = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+            return jpeg.tobytes()
+        finally:
+            self._set_busy(False)
 
 
     def cleanup(self):

@@ -30,3 +30,9 @@ class PolarPoint3D:
     theta: float  # 0° to 180° (pole to pole)
     fi: float  # 0° to 360° (rotation around z-axis)
     r: float = 1
+
+    def __post_init__(self):
+        if not (0 <= self.theta <= 180):
+            raise ValueError(f"theta must be between 0 and 180 degrees, got {self.theta}")
+        if not (0 <= self.fi <= 360):
+            raise ValueError(f"fi must be between 0 and 360 degrees, got {self.fi}")

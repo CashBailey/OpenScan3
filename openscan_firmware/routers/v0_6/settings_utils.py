@@ -30,7 +30,10 @@ def create_settings_endpoints(
     )
     async def get_settings(name: str) -> T:
         """Get settings for a specific resource"""
-        controller = get_controller(name)
+        try:
+            controller = get_controller(name)
+        except ValueError as e:
+            raise HTTPException(status_code=404, detail=str(e))
         return controller.settings.model
 
     @router.put(
@@ -40,11 +43,14 @@ def create_settings_endpoints(
     )
     async def replace_settings(name: str, settings: settings_model) -> T:
         """Replace all settings for a specific resource"""
-        controller = get_controller(name)
+        try:
+            controller = get_controller(name)
+        except ValueError as e:
+            raise HTTPException(status_code=404, detail=str(e))
         try:
             controller.settings.replace(settings)
             return controller.settings.model
-        except Exception as e:
+        except (TypeError, ValueError) as e:
             raise HTTPException(status_code=422, detail=str(e))
 
 
@@ -66,11 +72,14 @@ def create_settings_endpoints(
         Returns:
             The updated settings for the resource
         """
-        controller = get_controller(name)
+        try:
+            controller = get_controller(name)
+        except ValueError as e:
+            raise HTTPException(status_code=404, detail=str(e))
         try:
             controller.settings.update(**settings)
             return controller.settings.model
-        except Exception as e:
+        except (TypeError, ValueError) as e:
             raise HTTPException(status_code=422, detail=str(e))
 
     return {

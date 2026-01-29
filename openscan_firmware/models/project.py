@@ -43,6 +43,7 @@ class Project(BaseModel):
 
 
     # Constants for Validation
+    MIN_NAME_LENGTH: ClassVar[int] = 3
     MAX_NAME_LENGTH: ClassVar[int] = 150  # ensures compatability with older Microsoft Windows versions
     VALID_NAME_PATTERN: ClassVar[re.Pattern] = re.compile(r'^[a-zA-Z0-9_. ][a-zA-Z0-9_\-. ]+[a-zA-Z0-9]$')
 
@@ -65,14 +66,16 @@ class Project(BaseModel):
                 f"The name should not exceed {cls.MAX_NAME_LENGTH} characters."
             )
 
-        if len(name) < 1:
-            raise ValueError("The name of the project cannot be empty.")
+        if len(name) < cls.MIN_NAME_LENGTH:
+            raise ValueError(
+                f"The name of the project must be at least {cls.MIN_NAME_LENGTH} characters."
+            )
 
         # Check for invalid characters or patterns
         if not cls.VALID_NAME_PATTERN.match(name):
             raise ValueError(
-                "The project name should only contain characters, numbers, underscores, hyphens and periods. "
-                "It must not start with an hyphen."
+                "The project name must contain only letters, numbers, underscores, hyphens, periods, and spaces. "
+                "It must not start with a hyphen and must end with a letter or number."
             )
 
         return name

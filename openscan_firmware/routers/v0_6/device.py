@@ -1,9 +1,11 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from pydantic import BaseModel, ValidationError
 import os
 import json
 import tempfile
 import shutil
+import re
+from pathlib import Path
 
 from openscan_firmware.models.scanner import ScannerDevice
 from openscan_firmware.controllers import device
@@ -12,6 +14,7 @@ from openscan_firmware.utils.settings import resolve_settings_dir
 from .cameras import CameraStatusResponse
 from .motors import MotorStatusResponse
 from .lights import LightStatusResponse
+from openscan_firmware.security import require_admin
 
 router = APIRouter(
     prefix="/device",
@@ -38,6 +41,51 @@ class DeviceControlResponse(BaseModel):
     status: DeviceStatusResponse
 
 
+_SAFE_CONFIG_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
+
+
+def _validate_config_filename(config_name: str) -> str:
+    candidate = (config_name or "").strip()
+    if not candidate:
+        raise HTTPException(status_code=400, detail="Config filename is required.")
+    if not _SAFE_CONFIG_NAME.match(candidate):
+        raise HTTPException(status_code=400, detail="Config filename contains invalid characters.")
+    if os.sep in candidate or (os.altsep and os.altsep in candidate) or ".." in candidate:
+        raise HTTPException(status_code=400, detail="Config filename must not contain path separators.")
+    return candidate
+
+
+def _resolve_config_path(config_value: str, available_configs: list[dict]) -> str:
+    if not config_value:
+        raise HTTPException(status_code=400, detail="Config filename is required.")
+
+    config_paths: dict[Path, dict] = {}
+    config_files: dict[str, dict] = {}
+    for config in available_configs:
+        path = config.get("path")
+        filename = config.get("filename")
+        if path:
+            config_paths[Path(path).resolve()] = config
+        if filename:
+            config_files[filename] = config
+
+    if not os.path.dirname(config_value):
+        safe_name = _validate_config_filename(config_value)
+        lookup_names = {safe_name}
+        if not safe_name.endswith(".json"):
+            lookup_names.add(f"{safe_name}.json")
+        for name in lookup_names:
+            match = config_files.get(name)
+            if match and match.get("path"):
+                return str(match["path"])
+        raise HTTPException(status_code=404, detail=f"Config file not found: {config_value}")
+
+    candidate = Path(config_value).expanduser().resolve()
+    if candidate in config_paths:
+        return str(candidate)
+
+    raise HTTPException(status_code=404, detail=f"Config file not found: {config_value}")
+
 @router.get("/info", response_model=DeviceStatusResponse)
 async def get_device_info():
     """Get information about the device
@@ -56,7 +104,7 @@ async def get_device_info():
                 "errors": exc.errors(),
             },
         )
-    except Exception as e:
+    except (RuntimeError, OSError) as e:
         raise HTTPException(status_code=500, detail=f"Error getting device info: {str(e)}")
 
 
@@ -66,7 +114,7 @@ async def list_config_files():
     try:
         configs = device.get_available_configs()
         return {"status": "success", "configs": configs}
-    except Exception as e:
+    except OSError as e:
         raise HTTPException(status_code=500, detail=f"Error listing configuration files: {str(e)}")
 
 
@@ -96,11 +144,13 @@ async def add_config_json(config_data: ScannerDevice, filename: DeviceConfigRequ
         settings_dir = resolve_settings_dir("device")
         os.makedirs(settings_dir, exist_ok=True)
 
-        filename = f"{filename.config_file}.json"
-        target_path = os.path.join(settings_dir, filename)
+        safe_filename = _validate_config_filename(filename.config_file)
+        if not safe_filename.endswith(".json"):
+            safe_filename = f"{safe_filename}.json"
+        target_path = Path(settings_dir) / safe_filename
 
         # Move the temporary file to the target path
-        shutil.move(temp_path, target_path)
+        shutil.move(temp_path, str(target_path))
 
         return DeviceControlResponse(
             success=True,
@@ -108,7 +158,9 @@ async def add_config_json(config_data: ScannerDevice, filename: DeviceConfigRequ
             status=DeviceStatusResponse.model_validate(device.get_device_info())
         )
 
-    except Exception as e:
+    except HTTPException:
+        raise
+    except (OSError, json.JSONDecodeError, ValidationError) as e:
         raise HTTPException(status_code=500, detail=f"Error setting device configuration: {str(e)}")
 
 
@@ -145,28 +197,7 @@ async def set_config_file(config_data: DeviceConfigRequest):
         available_configs = device.get_available_configs()
 
         # Check if the config file exists in available configs
-        config_file = config_data.config_file
-        config_found = False
-
-        # If it's just a filename (no path), try to find it in available configs
-        if not os.path.dirname(config_file):
-            for config in available_configs:
-                if config["filename"] == config_file:
-                    config_file = config["path"]
-                    config_found = True
-                    break
-        else:
-            # Check if the full path exists
-            config_found = os.path.exists(config_file)
-
-        if not config_found:
-            raise HTTPException(
-                status_code=404,
-                detail={
-                    "message": f"Config file not found: {config_data.config_file}",
-                    "available_configs": available_configs
-                }
-            )
+        config_file = _resolve_config_path(config_data.config_file, available_configs)
 
         # Set device config
         if device.set_device_config(config_file):
@@ -181,7 +212,7 @@ async def set_config_file(config_data: DeviceConfigRequest):
     except HTTPException:
         # Re-raise HTTP exceptions to preserve status code and detail
         raise
-    except Exception as e:
+    except (OSError, json.JSONDecodeError, ValidationError, RuntimeError) as e:
         raise HTTPException(status_code=500, detail=f"Error setting device configuration: {str(e)}")
 
 
@@ -204,12 +235,12 @@ async def reinitialize_hardware(detect_cameras: bool = False):
             message="Hardware reinitialized successfully",
             status=DeviceStatusResponse.model_validate(device.get_device_info())
         )
-    except Exception as e:
+    except (RuntimeError, OSError, ValidationError) as e:
         raise HTTPException(status_code=500, detail=f"Error reloading hardware: {str(e)}")
 
 
 @router.post("/reboot", response_model=bool)
-def reboot(save_config: bool = False):
+def reboot(save_config: bool = False, _admin: None = Depends(require_admin)):
     """Reboot system and optionally save config.
 
     Args:
@@ -220,7 +251,7 @@ def reboot(save_config: bool = False):
 
 
 @router.post("/shutdown", response_model=bool)
-def shutdown(save_config: bool = False) -> None:
+def shutdown(save_config: bool = False, _admin: None = Depends(require_admin)) -> None:
     """Shutdown system and optionally save config.
 
     Args:

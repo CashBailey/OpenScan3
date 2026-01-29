@@ -46,9 +46,25 @@ from openscan_firmware.models.task import TaskStatus
 logger = logging.getLogger(__name__)
 
 
+def _resolve_project_path(projects_path: str, project_name: str) -> pathlib.Path:
+    """Resolve a project path safely under the projects root."""
+    base_path = pathlib.Path(projects_path).resolve()
+    if not project_name:
+        raise ValueError("Project name is required.")
+    if os.path.isabs(project_name):
+        raise ValueError("Project name must be a relative path.")
+    if os.sep in project_name or (os.altsep and os.altsep in project_name) or ".." in project_name:
+        raise ValueError("Project name must not contain path separators.")
+
+    candidate = (base_path / project_name).resolve()
+    if not candidate.is_relative_to(base_path):
+        raise ValueError("Project path escapes the projects directory.")
+    return candidate
+
+
 def _get_project_path(projects_path: str, project_name: str) -> str:
     """Get the absolute path for a project"""
-    return os.path.join(str(projects_path), project_name)
+    return str(_resolve_project_path(projects_path, project_name))
 
 
 def get_project(projects_path: str, project_name: str) -> Project:
@@ -87,14 +103,23 @@ def get_project(projects_path: str, project_name: str) -> Project:
     )
 
 
-def delete_project(project: Project) -> bool:
+def delete_project(project: Project, projects_path: str) -> bool:
     """Delete a project from file system"""
     try:
-        if os.path.exists(project.path):
-            shutil.rmtree(project.path)
+        base_path = pathlib.Path(projects_path).resolve()
+        project_path = pathlib.Path(project.path).resolve()
+        if not project_path.is_relative_to(base_path) or project_path == base_path:
+            logger.error(
+                "Refusing to delete project outside projects root: %s (root=%s)",
+                project_path,
+                base_path,
+            )
+            return False
+        if project_path.exists():
+            shutil.rmtree(project_path)
             return True
         return False
-    except Exception as e:
+    except OSError as e:
         logger.error(f"Error deleting project: {e}", exc_info=e)
         return False
 
@@ -133,7 +158,7 @@ def _write_json_atomic(file_path: str, payload: str) -> None:
         with os.fdopen(fd, "w") as temp_file:
             temp_file.write(payload)
         os.replace(temp_path, file_path)
-    except Exception:
+    except OSError:
         try:
             os.remove(temp_path)
         except FileNotFoundError:
@@ -267,7 +292,7 @@ class ProjectManager:
                     project = get_project(self._path, folder)
                     self._reset_incomplete_scans(project)
                     self._projects[folder] = project
-                except Exception as e:
+                except (OSError, json.JSONDecodeError, ValueError, KeyError) as e:
                     logger.error(f"Error loading project {folder}: {e}", exc_info=True)
 
         logger.info(f"Loaded {len(self._projects)} projects.")
@@ -455,7 +480,7 @@ class ProjectManager:
             True if the project was successfully deleted, False otherwise.
 
         """
-        if delete_project(project):
+        if delete_project(project, self._path):
             del self._projects[project.name]
             logger.info(f"Deleted project {project.name}")
             return True
@@ -515,9 +540,13 @@ class ProjectManager:
 
         Args:
             photo_data: The photo data to save.
-        """
 
+        Raises:
+            ValueError: If the project does not exist.
+        """
         project = self.get_project_by_name(photo_data.scan_metadata.project_name)
+        if project is None:
+            raise ValueError(f"Project '{photo_data.scan_metadata.project_name}' not found")
 
         photo_dir, photo_filename = self._prepare_photo_path(photo_data)
         metadata_dir = os.path.join(photo_dir, "metadata")
@@ -543,8 +572,13 @@ class ProjectManager:
 
         Returns:
             Tuple of (photo directory, photo filename)
+
+        Raises:
+            ValueError: If the project does not exist.
         """
         project = self.get_project_by_name(photo_data.scan_metadata.project_name)
+        if project is None:
+            raise ValueError(f"Project '{photo_data.scan_metadata.project_name}' not found")
         photo_dir = os.path.join(project.path, f"scan{photo_data.scan_metadata.scan_index:02d}")
 
         scan_index = photo_data.scan_metadata.scan_index
@@ -621,7 +655,7 @@ class ProjectManager:
             logger.info(f"Deleted scan {scan_id} from project {scan.project_name}")
 
             return True
-        except Exception as e:
+        except OSError as e:
             logger.error(f"Error deleting scan: {e}", exc_info=True)
             return False
 
@@ -656,7 +690,7 @@ class ProjectManager:
             )
 
             return True
-        except Exception as e:
+        except (OSError, ValueError) as e:
             logger.error(f"Error deleting photo: {e}", exc_info=True)
             return False
 
@@ -671,27 +705,26 @@ def get_project_manager(path: Optional[pathlib.PurePath] = None) -> ProjectManag
         if _active_project_manager:
             logger.debug("No path provided, returning existing ProjectManager")
             return _active_project_manager
+        # No existing manager and no path provided - create with default
+        logger.warning("No path provided, initializing new ProjectManager with default path")
+        _active_project_manager = ProjectManager()
+        return _active_project_manager
 
-    resolved_path_str = str(pathlib.Path(path).resolve()) if path else None
+    resolved_path_str = str(pathlib.Path(path).resolve())
 
     if _active_project_manager is None:
-        if resolved_path_str is None:
-            logger.warning("No path provided, initializing new ProjectManager with default path")
-            _active_project_manager = ProjectManager()
         logger.info(f"Creating new ProjectManager for {path}")
         _active_project_manager = ProjectManager(path)
         return _active_project_manager
-    else:
-        # An instance already exists, check if paths match
-        # Ensure _active_project_manager._path is also a resolved string for fair comparison
-        # Assuming _active_project_manager._path was stored as a resolved string or Path object
-        current_manager_path_str = str(pathlib.Path(_active_project_manager._path).resolve())
 
-        if resolved_path_str == current_manager_path_str:
-            logger.debug("Explicitly requested ProjectManager for the same path already exists, returning existing ProjectManager")
-            return _active_project_manager
-        else:
-            raise RuntimeError(
-                f"ProjectManager is already initialized with a different path. "
-                f"Current: '{current_manager_path_str}', Requested: '{resolved_path_str}'"
-            )
+    # An instance already exists, check if paths match
+    current_manager_path_str = str(pathlib.Path(_active_project_manager._path).resolve())
+
+    if resolved_path_str == current_manager_path_str:
+        logger.debug("Explicitly requested ProjectManager for the same path already exists, returning existing ProjectManager")
+        return _active_project_manager
+
+    raise RuntimeError(
+        f"ProjectManager is already initialized with a different path. "
+        f"Current: '{current_manager_path_str}', Requested: '{resolved_path_str}'"
+    )

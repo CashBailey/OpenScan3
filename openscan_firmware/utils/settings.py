@@ -78,6 +78,6 @@ def load_settings_json(filename: str, subdirectory: str | None = None) -> dict[s
 
     try:
         return json.loads(candidate.read_text())
-    except Exception:
-        LOGGER.exception("Failed to read settings JSON from %s", candidate)
+    except (OSError, json.JSONDecodeError) as e:
+        LOGGER.exception("Failed to read settings JSON from %s: %s", candidate, e)
         return None

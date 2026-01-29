@@ -1,6 +1,7 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from openscan_firmware.controllers.hardware import gpio
+from openscan_firmware.security import require_admin
 
 router = APIRouter(
     prefix="/gpio",
@@ -33,7 +34,7 @@ async def get_pin(pin_id: int):
 
 
 @router.patch("/{pin_id}")
-async def set_pin(pin_id: int, status: bool):
+async def set_pin(pin_id: int, status: bool, _admin: None = Depends(require_admin)):
     """Set GPIO pin output value
 
     Args:
@@ -44,7 +45,7 @@ async def set_pin(pin_id: int, status: bool):
 
 
 @router.patch("/{pin_id}/toggle")
-async def toggle_pin(pin_id: int):
+async def toggle_pin(pin_id: int, _admin: None = Depends(require_admin)):
     """Toggle GPIO pin output value
 
     Args:

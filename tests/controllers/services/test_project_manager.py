@@ -12,6 +12,8 @@ from openscan_firmware.controllers.services.projects import (
     ProjectManager,
     _write_json_atomic,
     save_project,
+    get_project,
+    delete_project,
 )
 from openscan_firmware.config.camera import CameraSettings
 from openscan_firmware.config.scan import ScanSetting
@@ -19,6 +21,7 @@ from openscan_firmware.models.camera import PhotoData
 from openscan_firmware.models.paths import PolarPoint3D
 from openscan_firmware.models.scan import Scan, ScanMetadata, StackingTaskStatus
 from openscan_firmware.models.task import TaskStatus
+from openscan_firmware.models.project import Project
 
 
 # --- Test Cases for ProjectManager ---
@@ -186,6 +189,28 @@ def test_pm_recovers_incomplete_scans(
         persisted_payload = json.load(handle)
 
     assert persisted_payload["status"] == TaskStatus.INTERRUPTED.value
+
+
+def test_get_project_rejects_path_traversal(tmp_path: Path):
+    with pytest.raises(ValueError):
+        get_project(str(tmp_path), "../evil")
+
+
+def test_delete_project_refuses_outside_root(tmp_path: Path):
+    projects_root = tmp_path / "projects"
+    projects_root.mkdir()
+    outside_project = tmp_path / "outside"
+    outside_project.mkdir()
+
+    project = Project(
+        name="outside",
+        path=str(outside_project),
+        created=datetime.now(),
+        scans={},
+    )
+
+    assert delete_project(project, str(projects_root)) is False
+    assert outside_project.exists()
 
 
 # @pytest.fixture

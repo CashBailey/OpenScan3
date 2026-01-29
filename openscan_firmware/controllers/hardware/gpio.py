@@ -1,6 +1,6 @@
 import logging
 
-from gpiozero import DigitalOutputDevice, Button
+from gpiozero import DigitalOutputDevice, Button, GPIOZeroError
 from typing import Dict, List, Optional, Callable
 
 logger = logging.getLogger(__name__)
@@ -21,7 +21,7 @@ def initialize_output_pins(pins: List[int]):
             try:
                 _output_pins[pin] = DigitalOutputDevice(pin, initial_value=False)
                 logger.debug(f"Initialized pin {pin} as DigitalOutputDevice.")
-            except Exception as e:
+            except (GPIOZeroError, OSError, RuntimeError) as e:
                 logger.error(f"Error initializing output pin {pin}: {e}", exc_info=True)
                 # Clean up if initialization failed partially
                 if pin in _output_pins:
@@ -80,7 +80,7 @@ def initialize_button(pin: int, pull_up: Optional[bool] = True, bounce_time: Opt
         try:
             _buttons[pin] = Button(pin, pull_up=pull_up, bounce_time=bounce_time, hold_time=0.01)
             logger.debug(f"Initialized pin {pin} as Button (pull_up={pull_up}, bounce_time={bounce_time})")
-        except Exception as e:
+        except (GPIOZeroError, OSError, RuntimeError) as e:
             logger.error(f"Error initializing button on pin {pin}: {e}", exc_info=True)
             # Clean up if initialization failed partially
             if pin in _buttons:
@@ -187,7 +187,7 @@ def cleanup_all_pins():
             _output_pins[pin].close()
             del _output_pins[pin] # Remove from tracking dict after successful close
             logger.debug(f"Output pin {pin} closed.")
-        except Exception as e:
+        except (GPIOZeroError, OSError, RuntimeError) as e:
             logger.error(f"Error closing output pin {pin}: {e}", exc_info=True)
 
     # Close buttons
@@ -197,7 +197,7 @@ def cleanup_all_pins():
             _buttons[pin].close()
             del _buttons[pin] # Remove from tracking dict after successful close
             logger.debug(f"Button on pin {pin} closed.")
-        except Exception as e:
+        except (GPIOZeroError, OSError, RuntimeError) as e:
             logger.error(f"Error closing button on pin {pin}: {e}", exc_info=True)
 
     # Double check if dictionaries are empty

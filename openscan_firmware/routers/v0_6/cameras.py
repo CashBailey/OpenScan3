@@ -1,6 +1,6 @@
 import asyncio
 
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi.responses import StreamingResponse, Response
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel
@@ -11,6 +11,7 @@ from openscan_firmware.controllers.hardware.cameras.camera import get_all_camera
 #from openscan_firmware.controllers.services.scans import get_active_scan_manager
 from openscan_firmware.controllers.hardware.motors import get_all_motor_controllers
 from .settings_utils import create_settings_endpoints
+from openscan_firmware.security import require_admin
 
 router = APIRouter(
     prefix="/cameras",
@@ -67,7 +68,10 @@ async def get_preview(camera_name: str):
     Returns:
         StreamingResponse: A streaming response containing the preview stream
     """
-    controller = get_camera_controller(camera_name)
+    try:
+        controller = get_camera_controller(camera_name)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
     async def generate():
         while True:
@@ -104,16 +108,19 @@ async def get_photo(camera_name: str):
     Returns:
         Response: A response containing the photo
     """
-    controller = get_camera_controller(camera_name)
+    try:
+        controller = get_camera_controller(camera_name)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     try:
         if not controller.is_busy():
             return Response(content=controller.photo().data.getvalue(), media_type="image/jpeg")
-    except Exception as e:
-        return Response(status_code=500, content=str(e))
-    return Response(status_code=409, content="Camera is busy. If this is a bug, please restart the camera.")
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    raise HTTPException(status_code=409, detail="Camera is busy. If this is a bug, please restart the camera.")
 
 @router.post("/{camera_name}/restart")
-async def restart_camera(camera_name: str):
+async def restart_camera(camera_name: str, _admin: None = Depends(require_admin)):
     """Restart a camera
 
     Args:
@@ -122,7 +129,10 @@ async def restart_camera(camera_name: str):
     Returns:
         Response: A response containing the status code
     """
-    controller = get_camera_controller(camera_name)
+    try:
+        controller = get_camera_controller(camera_name)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     controller.restart_camera()
     return Response(status_code=200)
 

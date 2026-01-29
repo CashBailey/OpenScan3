@@ -157,10 +157,10 @@ class FocusStackingTask(BaseTask):
                 total=total_batches,
                 message="Focus stacking complete"
             )
-        except Exception:
+        except (OSError, RuntimeError, ValueError) as exc:
             scan.stacking_task_status.status = TaskStatus.ERROR
             await project_manager.save_scan_state(scan)
-            raise
+            raise exc
 
     def _find_batches(self, scan_dir: str) -> dict:
         """Find image batches (blocking I/O)."""

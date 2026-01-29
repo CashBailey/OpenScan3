@@ -163,7 +163,7 @@ class ScanTask(BaseTask):
             # Execute main scan loop
             async for progress in self._execute_scan_loop(start_from_step, total):
                 yield progress
-        except Exception as e:
+        except (OSError, RuntimeError, ValueError, asyncio.CancelledError) as e:
             logger.error(
                 "Error during scan %s for project %s: %s",
                 scan.index,
@@ -203,7 +203,7 @@ class ScanTask(BaseTask):
                 raise ValueError("ProjectManager not available")
 
             return camera_controller, project_manager
-        except Exception as e:
+        except (RuntimeError, ValueError, AttributeError) as e:
             logger.error("Failed to initialize scan and get controllers: %s", e)
             scan.status = TaskStatus.ERROR
             scan.system_message = f"Controller initialization failed: {e}"
@@ -297,7 +297,7 @@ class ScanTask(BaseTask):
             # Capture photos (with or without focus stacking)
             try:
                 await self._capture_photos_at_position(current_point, original_index)
-            except Exception as e:
+            except (OSError, RuntimeError, ValueError) as e:
                 logger.error("Error taking photo at position %s: %s", original_index, e, exc_info=True)
                 raise
 
@@ -367,7 +367,7 @@ class ScanTask(BaseTask):
 
                     asyncio.create_task(self._ctx.project_manager.add_photo_async(photo_data))
 
-        except Exception as e:
+        except (OSError, RuntimeError, ValueError) as e:
             logger.error("Error taking photo at position %s: %s", index, e, exc_info=True)
             raise
 
@@ -387,5 +387,5 @@ class ScanTask(BaseTask):
                     logger.debug("Restoring previous focus settings")
                     self._ctx.camera_controller.settings.AF = previous_settings[0]
                     self._ctx.camera_controller.settings.manual_focus = previous_settings[1]
-        except Exception as e:
+        except (OSError, RuntimeError, AttributeError) as e:
             logger.error("Error during cleanup: %s", e, exc_info=True)

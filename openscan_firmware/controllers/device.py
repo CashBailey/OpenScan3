@@ -98,8 +98,8 @@ def load_device_config(config_file=None) -> dict:
         # No file specified, try to load device_config.json in selected settings dir
         try:
             DEVICE_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            logger.warning("Could not ensure settings directory exists: %s", DEVICE_CONFIG_FILE.parent)
+        except OSError as e:
+            logger.warning("Could not ensure settings directory exists: %s: %s", DEVICE_CONFIG_FILE.parent, e)
         if not os.path.exists(DEVICE_CONFIG_FILE):
             # If device_config.json doesn't exist, save minimal model as starting point
             with open(DEVICE_CONFIG_FILE, "w") as f:
@@ -114,11 +114,11 @@ def load_device_config(config_file=None) -> dict:
                 config_dict.update(loaded_config_from_file)
 
                 # if a config is specified, save it as device_config.json
-                if config_file != DEVICE_CONFIG_FILE:
+                if Path(config_file).resolve() != DEVICE_CONFIG_FILE.resolve():
                     with open(DEVICE_CONFIG_FILE, "w") as f:
                         json.dump(config_dict, f, indent=4)
             logger.info(f"Loaded device configuration for: {config_dict['name']} with {config_dict['shield']}")
-    except Exception as e:
+    except (OSError, json.JSONDecodeError, KeyError) as e:
         logger.error(f"Error loading device configuration: {e}")
 
     return config_dict
@@ -243,7 +243,7 @@ def _detect_cameras() -> Dict[str, Camera]:
                 return candidate
             suffix += 1
 
-    for camera_controller in get_all_camera_controllers():
+    for camera_controller in list(get_all_camera_controllers()):
         remove_camera_controller(camera_controller)
 
     cameras = {}
@@ -565,6 +565,7 @@ def shutdown(with_saving = False):
 
 
 def cleanup_and_exit():
+    # Clean up cameras
     cam_controllers = get_all_camera_controllers()
     for name, controller in cam_controllers.items():
         try:
@@ -573,6 +574,7 @@ def cleanup_and_exit():
         except Exception as e:
             logger.error(f"Error closing camera controller '{name}': {e}")
 
+    # Clean up endstops
     for name, endstop_controller in list(_endstop_controllers.items()):
         try:
             endstop_controller.cleanup()
@@ -580,6 +582,14 @@ def cleanup_and_exit():
         except Exception as e:
             logger.error("Error closing endstop controller '%s': %s", name, e)
         _endstop_controllers.pop(name, None)
+
+    # Turn off lights
+    for name, light_controller in get_all_light_controllers().items():
+        try:
+            light_controller.turn_off()
+            logger.debug("Light controller '%s' turned off.", name)
+        except Exception as e:
+            logger.error("Error turning off light '%s': %s", name, e)
 
     cleanup_all_pins()
     logger.info("Exiting now...")

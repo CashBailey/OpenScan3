@@ -3,12 +3,14 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import pathlib
+import re
 from typing import Optional, List
 import asyncio
 import os
 import json
 from datetime import datetime
 import logging
+from urllib.parse import quote
 
 
 from openscan_firmware.controllers.hardware.cameras.camera import get_all_camera_controllers, get_camera_controller
@@ -29,6 +31,21 @@ router = APIRouter(
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _sanitize_content_disposition_filename(filename: str) -> str:
+    """Sanitize filename for safe use in Content-Disposition headers.
+
+    Uses RFC 5987 encoding with a fallback ASCII-safe name.
+    """
+    # Create ASCII-safe fallback by removing non-ASCII and special chars
+    ascii_safe = re.sub(r'[^\w\s\-.]', '_', filename)
+    ascii_safe = re.sub(r'\s+', '_', ascii_safe)
+
+    # URL-encode the original for UTF-8 compatibility
+    encoded = quote(filename, safe='')
+
+    return f"{ascii_safe}; filename*=UTF-8''{encoded}"
 
 class DeleteResponse(BaseModel):
     success: bool
@@ -226,6 +243,8 @@ async def delete_scan(project_name: str, scan_index: int):
     """
     project_manager = get_project_manager()
     scan = project_manager.get_scan_by_index(project_name, scan_index)
+    if not scan:
+        raise HTTPException(status_code=404, detail=f"Scan {scan_index} not found")
     try:
         project_manager.delete_scan(scan)
         return DeleteResponse(
@@ -248,22 +267,19 @@ async def get_scan_status(project_name: str, scan_index: int):
     Returns:
         Task: The task representing the scan execution
     """
-    try:
-        project_manager = get_project_manager()
-        scan = project_manager.get_scan_by_index(project_name, scan_index)
-        if not scan:
-            raise HTTPException(status_code=404, detail=f"Scan {scan_index} not found")
-        if not scan.task_id:
-            raise HTTPException(status_code=404, detail=f"Scan {scan_index} has no associated task")
+    project_manager = get_project_manager()
+    scan = project_manager.get_scan_by_index(project_name, scan_index)
+    if not scan:
+        raise HTTPException(status_code=404, detail=f"Scan {scan_index} not found")
+    if not scan.task_id:
+        raise HTTPException(status_code=404, detail=f"Scan {scan_index} has no associated task")
 
-        task_manager_instance = get_task_manager()
-        task = task_manager_instance.get_task_info(scan.task_id)
-        if not task:
-            raise HTTPException(status_code=404, detail=f"Task {scan.task_id} not found for scan {scan_index}")
+    task_manager_instance = get_task_manager()
+    task = task_manager_instance.get_task_info(scan.task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Task {scan.task_id} not found for scan {scan_index}")
 
-        return task
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    return task
 
 
 @router.patch("/{project_name}/scans/{scan_index:int}/pause", response_model=Task)
@@ -302,34 +318,34 @@ async def resume_scan(project_name: str, scan_index: int, camera_name: str) -> T
         Task: The resumed or restarted task
     """
     try:
-
         camera_controller = get_camera_controller(camera_name)
-        project_manager = get_project_manager()
-        scan = project_manager.get_scan_by_index(project_name, scan_index)
-        if not scan:
-            raise HTTPException(status_code=404, detail=f"Scan {scan_index} not found")
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
-        task_manager_instance = get_task_manager()
-        existing_task = task_manager_instance.get_task_info(scan.task_id) if scan.task_id else None
+    project_manager = get_project_manager()
+    scan = project_manager.get_scan_by_index(project_name, scan_index)
+    if not scan:
+        raise HTTPException(status_code=404, detail=f"Scan {scan_index} not found")
 
-        if existing_task and existing_task.status == TaskStatus.PAUSED:
-            task = await scans.resume_scan(scan)
-        elif not existing_task or existing_task.status in [TaskStatus.COMPLETED, TaskStatus.CANCELLED, TaskStatus.ERROR]:
-            task = await scans.start_scan(
-                project_manager,
-                scan,
-                camera_controller,
-                start_from_step=scan.current_step
-            )
-        else:
-            raise HTTPException(status_code=409, detail=f"Scan cannot be resumed from its current state: {existing_task.status.value}")
+    task_manager_instance = get_task_manager()
+    existing_task = task_manager_instance.get_task_info(scan.task_id) if scan.task_id else None
 
-        if task is None:
-            raise HTTPException(status_code=409, detail="Failed to resume scan task.")
+    if existing_task and existing_task.status == TaskStatus.PAUSED:
+        task = await scans.resume_scan(scan)
+    elif not existing_task or existing_task.status in [TaskStatus.COMPLETED, TaskStatus.CANCELLED, TaskStatus.ERROR]:
+        task = await scans.start_scan(
+            project_manager,
+            scan,
+            camera_controller,
+            start_from_step=scan.current_step
+        )
+    else:
+        raise HTTPException(status_code=409, detail=f"Scan cannot be resumed from its current state: {existing_task.status.value}")
 
-        return task
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    if task is None:
+        raise HTTPException(status_code=409, detail="Failed to resume scan task.")
+
+    return task
 
 
 @router.patch("/{project_name}/scans/{scan_index:int}/cancel", response_model=Task)
@@ -407,7 +423,7 @@ async def download_project(project_name: str):
 
         # Return streaming response
         headers = {
-            "Content-Disposition": f"attachment; filename={project_name}.zip",
+            "Content-Disposition": f"attachment; filename={_sanitize_content_disposition_filename(project_name + '.zip')}",
         }
         if getattr(zs, "last_modified", None):
             headers["Last-Modified"] = str(zs.last_modified)
@@ -472,14 +488,14 @@ async def download_scans(project_name: str, scan_indices: List[int] = Query(None
         else:
             filename = f"{project_name}_all_scans.zip"
             for scan_id, scan in project.scans.items():
-                scan_dir = os.path.join(project.path, f"scan_{scan.index}")
+                scan_dir = os.path.join(project.path, f"scan{scan.index:02d}")
                 if os.path.exists(scan_dir):
-                    zs.add_path(scan_dir, f"scan_{scan.index}")
+                    zs.add_path(scan_dir, f"scan{scan.index:02d}")
 
         zs.add(_serialize_project_for_zip(project), "project_metadata.json")
 
         headers = {
-            "Content-Disposition": f"attachment; filename={filename}",
+            "Content-Disposition": f"attachment; filename={_sanitize_content_disposition_filename(filename)}",
         }
         if getattr(zs, "last_modified", None):
             headers["Last-Modified"] = str(zs.last_modified)
@@ -491,9 +507,9 @@ async def download_scans(project_name: str, scan_indices: List[int] = Query(None
         )
         return response
     except FileNotFoundError:
-        raise HTTPException(status_code=404, detail=f"")
-    except Exception as e:
-        print(e)
+        raise HTTPException(status_code=404, detail=f"Project {project_name} not found")
+    except (OSError, ValueError, RuntimeError) as e:
+        logger.exception("Error creating scan ZIP for project %s: %s", project_name, e)
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/{project_name}/scans/{scan_index:int}", response_model=Scan)
@@ -509,6 +525,13 @@ async def get_scan(project_name: str, scan_index: int):
     """
     try:
         project_manager = get_project_manager()
-        return project_manager.get_scan_by_index(project_name, scan_index)
-    except Exception as e:
+        scan = project_manager.get_scan_by_index(project_name, scan_index)
+        if scan is None:
+            raise HTTPException(status_code=404, detail=f"Scan {scan_index} not found in project {project_name}")
+        return scan
+    except HTTPException:
+        raise
+    except (ValueError, KeyError) as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except (OSError, RuntimeError) as e:
         raise HTTPException(status_code=500, detail=str(e))

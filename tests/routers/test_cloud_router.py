@@ -71,7 +71,13 @@ def test_cloud_status_success(client, monkeypatch, latest_router_path):
     assert payload["message"] is None
 
 
-def test_update_cloud_settings_persists(client, monkeypatch, tmp_path, latest_router_path):
+def test_update_cloud_settings_persists(
+    client,
+    monkeypatch,
+    tmp_path,
+    latest_router_path,
+    admin_headers,
+):
     module_path = latest_router_path("cloud")
     saved = {}
 
@@ -95,7 +101,7 @@ def test_update_cloud_settings_persists(client, monkeypatch, tmp_path, latest_ro
         "split_size": 1024,
     }
 
-    response = client.post("/cloud/settings", json=payload)
+    response = client.post("/cloud/settings", json=payload, headers=admin_headers)
 
     assert response.status_code == 200
     assert saved["settings"]["user"] == "api-user"
@@ -168,7 +174,7 @@ def test_list_cloud_projects(client, monkeypatch, latest_router_path):
     assert stub_pm.calls == [("demo", True, "demo-remote.zip")]
 
 
-def test_reset_cloud_project(client, monkeypatch, latest_router_path):
+def test_reset_cloud_project(client, monkeypatch, latest_router_path, admin_headers):
     module_path = latest_router_path("cloud")
     project = Project(
         name="demo",
@@ -205,7 +211,7 @@ def test_reset_cloud_project(client, monkeypatch, latest_router_path):
         lambda remote_name: {"reset": remote_name},
     )
 
-    response = client.delete("/cloud/projects/demo")
+    response = client.delete("/cloud/projects/demo", headers=admin_headers)
 
     assert response.status_code == 200
     assert response.json()["remote_project"] == "demo-remote.zip"

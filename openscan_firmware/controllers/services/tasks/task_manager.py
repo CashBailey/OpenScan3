@@ -780,7 +780,7 @@ class TaskManager:
                 pkg = importlib.import_module(ns)
                 modules_to_scan.append(ns)
                 logger.debug(f"Imported namespace package '{ns}' for autodiscovery.")
-            except Exception as e:
+            except (ImportError, ModuleNotFoundError, AttributeError) as e:
                 msg = f"Failed to import namespace '{ns}' during autodiscovery: {e}"
                 if safe_mode:
                     logger.warning(msg)
@@ -803,7 +803,7 @@ class TaskManager:
             try:
                 module = importlib.import_module(mod_name)
                 logger.debug(f"Imported module '{mod_name}' for autodiscovery.")
-            except Exception as e:
+            except (ImportError, ModuleNotFoundError, AttributeError) as e:
                 msg = f"Failed to import module '{mod_name}' during autodiscovery: {e}"
                 if safe_mode:
                     logger.warning(msg)

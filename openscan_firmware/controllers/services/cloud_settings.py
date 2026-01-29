@@ -61,8 +61,8 @@ def load_persistent_cloud_settings() -> CloudSettings | None:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         return CloudSettings.model_validate(data)
-    except Exception:  # pragma: no cover - logged for observability
-        logger.exception("Failed to read cloud settings from %s", path)
+    except (OSError, json.JSONDecodeError, ValueError) as exc:  # pragma: no cover - logged for observability
+        logger.exception("Failed to read cloud settings from %s: %s", path, exc)
         return None
 
 

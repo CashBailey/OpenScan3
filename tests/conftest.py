@@ -43,6 +43,19 @@ def latest_router_loader():
 def latest_router_path():
     return _latest_router_module_path
 
+
+@pytest.fixture
+def admin_token(monkeypatch) -> str:
+    token = "test-admin-token"
+    monkeypatch.setenv("OPENSCAN_ADMIN_TOKEN", token)
+    monkeypatch.delenv("OPENSCAN_ALLOW_INSECURE_ADMIN", raising=False)
+    return token
+
+
+@pytest.fixture
+def admin_headers(admin_token: str) -> dict[str, str]:
+    return {"X-OpenScan-Token": admin_token}
+
 @pytest.fixture
 def MOCKED_PROJECTS_PATH(tmp_path) -> Path:
     """Fixture to create a temporary, isolated projects directory for testing."""

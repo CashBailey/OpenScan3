@@ -104,13 +104,16 @@ async def get_photo(camera_name: str):
     Returns:
         Response: A response containing the photo
     """
-    controller = get_camera_controller(camera_name)
+    try:
+        controller = get_camera_controller(camera_name)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     try:
         if not controller.is_busy():
             return Response(content=controller.photo().data.getvalue(), media_type="image/jpeg")
-    except Exception as e:
-        return Response(status_code=500, content=str(e))
-    return Response(status_code=409, content="Camera is busy. If this is a bug, please restart the camera.")
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    raise HTTPException(status_code=409, detail="Camera is busy. If this is a bug, please restart the camera.")
 
 @router.post("/{camera_name}/restart")
 async def restart_camera(camera_name: str):

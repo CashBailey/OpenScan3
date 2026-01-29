@@ -121,7 +121,7 @@ class CropTask(BaseTask):
         # Apply orientation based on camera settings so analysis matches user view
         try:
             orientation_flag = int(controller.settings.orientation_flag or 1)
-        except Exception:
+        except (ValueError, TypeError, AttributeError):
             orientation_flag = 1
         image_oriented = self._apply_orientation(image, orientation_flag)
 

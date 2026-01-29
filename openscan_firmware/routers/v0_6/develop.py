@@ -4,10 +4,11 @@ Developer endpoints
 These may be removed or changed at any time.
 """
 
+import asyncio
 import base64
 import time
 
-from fastapi import APIRouter, HTTPException, status, Response, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Response, Query
 
 from openscan_firmware.controllers.services.tasks.task_manager import get_task_manager
 from openscan_firmware.models.task import TaskStatus, Task
@@ -17,12 +18,14 @@ from openscan_firmware.controllers.hardware.motors import move_to_point
 
 from openscan_firmware.utils.paths import paths
 from openscan_firmware.cli import DEFAULT_RELOAD_TRIGGER
+from openscan_firmware.security import require_admin
 
 
 router = APIRouter(
     prefix="/develop",
     tags=["develop"],
     responses={404: {"description": "Not found"}},
+    dependencies=[Depends(require_admin)],
 )
 
 @router.put("/scanner-position")
@@ -62,7 +65,7 @@ async def crop_image(camera_name: str, threshold: int | None = Query(default=Non
     # Wait for completion (default TaskManager timeout is fine for demo; can be adjusted if needed)
     try:
         final_task = await task_manager.wait_for_task(task.id, timeout=120.0)
-    except Exception as e:
+    except (asyncio.TimeoutError, RuntimeError) as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Waiting for task failed: {e}")
 
     if final_task.status != TaskStatus.COMPLETED:
@@ -75,7 +78,7 @@ async def crop_image(camera_name: str, threshold: int | None = Query(default=Non
 
     try:
         img_bytes = base64.b64decode(result["image_base64"])
-    except Exception:
+    except (ValueError, TypeError):
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to decode image from task result.")
 
     return Response(content=img_bytes, media_type=result.get("mime", "image/jpeg"))

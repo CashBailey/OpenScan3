@@ -50,7 +50,7 @@ class WebSocketHub:
         for connection in connections:
             try:
                 await connection.send_json(message)
-            except Exception as e:
+            except (WebSocketDisconnect, ConnectionError, RuntimeError) as e:
                 logger.error(f"Failed to send message to WebSocket: {e}")
                 stale_connections.append(connection)
 

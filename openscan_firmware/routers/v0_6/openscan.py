@@ -1,5 +1,5 @@
 import asyncio
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
 from typing import Tuple
@@ -10,6 +10,7 @@ from typing import AsyncGenerator
 from starlette.responses import FileResponse
 from starlette.background import BackgroundTask
 from openscan_firmware.config.logger import DEFAULT_LOGS_PATH, flush_memory_handlers
+from openscan_firmware.security import require_admin
 import os
 import zipfile
 import glob
@@ -125,7 +126,13 @@ async def _follow_file(file_path: str, poll_interval: float = 1) -> AsyncGenerat
 
 
 @router.get("/logs/tail")
-async def tail_logs(format: str = "text", lines: int = 200, follow: bool = False, poll_interval: float = 1):
+async def tail_logs(
+    format: str = "text",
+    lines: int = 200,
+    follow: bool = False,
+    poll_interval: float = 1,
+    _admin: None = Depends(require_admin),
+):
     """Show or follow current logs.
 
     When follow=false (default), returns the last N lines of the selected log.
@@ -174,7 +181,7 @@ async def tail_logs(format: str = "text", lines: int = 200, follow: bool = False
 
 
 @router.get("/logs/archive")
-async def download_logs_archive():
+async def download_logs_archive(_admin: None = Depends(require_admin)):
     """Create and download a ZIP archive containing all log files.
 
     The archive includes rotated files for both text and JSON logs, using

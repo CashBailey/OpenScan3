@@ -134,6 +134,20 @@ def test_delete_scan_endpoint_rejects_legacy_path(
     assert response.status_code == 404
 
 
+def test_delete_scan_endpoint_returns_404_for_missing_scan(
+    api_client: TestClient,
+    api_project_manager: ProjectManager,
+    sample_scan_settings: ScanSetting,
+    latest_router_path,
+) -> None:
+    project, _, _ = _prepare_scan(api_project_manager, sample_scan_settings)
+
+    with patch(f"{latest_router_path('projects')}.get_project_manager", return_value=api_project_manager):
+        response = api_client.delete(f"/latest/projects/{project.name}/scans/999")
+
+    assert response.status_code == 404
+
+
 def test_resume_endpoint_persists_status(
     api_client: TestClient,
     api_project_manager: ProjectManager,

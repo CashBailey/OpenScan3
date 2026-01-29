@@ -11,7 +11,13 @@ from openscan_firmware.cli import _cmd_serve
 import openscan_firmware.main as main_module
 
 
-def test_restart_endpoint_updates_reload_trigger(monkeypatch, tmp_path, latest_router_loader, latest_router_path):
+def test_restart_endpoint_updates_reload_trigger(
+    monkeypatch,
+    tmp_path,
+    latest_router_loader,
+    latest_router_path,
+    admin_headers,
+):
     """The restart endpoint should create and update the reload sentinel file."""
     sentinel_file = tmp_path / "reload.trigger"
     monkeypatch.setattr("openscan_firmware.cli.DEFAULT_RELOAD_TRIGGER", sentinel_file, raising=False)
@@ -22,7 +28,7 @@ def test_restart_endpoint_updates_reload_trigger(monkeypatch, tmp_path, latest_r
     monkeypatch.setattr(develop.time, "time", lambda: float(next(time_values)))
 
     with TestClient(main_module.app) as client:
-        first_response = client.post("/latest/develop/restart")
+        first_response = client.post("/latest/develop/restart", headers=admin_headers)
         assert first_response.status_code == 202
         assert first_response.json() == {"detail": "Reload triggered"}
         assert sentinel_file.exists()
@@ -30,7 +36,7 @@ def test_restart_endpoint_updates_reload_trigger(monkeypatch, tmp_path, latest_r
         first_contents = sentinel_file.read_text(encoding="utf-8")
         first_mtime = sentinel_file.stat().st_mtime
 
-        second_response = client.post("/latest/develop/restart")
+        second_response = client.post("/latest/develop/restart", headers=admin_headers)
         assert second_response.status_code == 202
         assert second_response.json() == {"detail": "Reload triggered"}
         assert sentinel_file.exists()
@@ -75,7 +81,13 @@ def test_cli_reload_trigger_configures_uvicorn(monkeypatch, tmp_path):
     assert params["reload_excludes"] == ["*.py", "*.pyc", "*.pyi", "*.pyd", "*.pyo"]
 
 
-def test_restart_triggers_device_initialize_on_reload(monkeypatch, tmp_path, latest_router_loader, latest_router_path):
+def test_restart_triggers_device_initialize_on_reload(
+    monkeypatch,
+    tmp_path,
+    latest_router_loader,
+    latest_router_path,
+    admin_headers,
+):
     """Touching the reload endpoint should trigger re-initialization after reload."""
 
     sentinel_file = tmp_path / "reload.trigger"
@@ -96,7 +108,7 @@ def test_restart_triggers_device_initialize_on_reload(monkeypatch, tmp_path, lat
     # First app lifecycle run (baseline)
     with TestClient(main_module.app) as client:
         assert len(init_calls) == 1
-        response = client.post("/latest/develop/restart")
+        response = client.post("/latest/develop/restart", headers=admin_headers)
         assert response.status_code == 202
 
     # Reload the main module to simulate uvicorn reload picking up the sentinel change
@@ -106,3 +118,13 @@ def test_restart_triggers_device_initialize_on_reload(monkeypatch, tmp_path, lat
         pass
 
     assert len(init_calls) == 2
+
+
+def test_restart_requires_admin_token(monkeypatch):
+    monkeypatch.delenv("OPENSCAN_ADMIN_TOKEN", raising=False)
+    monkeypatch.delenv("OPENSCAN_ALLOW_INSECURE_ADMIN", raising=False)
+
+    with TestClient(main_module.app) as client:
+        response = client.post("/latest/develop/restart")
+
+    assert response.status_code == 503

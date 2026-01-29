@@ -16,7 +16,7 @@ async def start_focus_stacking(project_name: str, scan_index: int) -> Task:
         return await focus_service.start_focus_stacking(project_name, scan_index)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except Exception as exc:  # pragma: no cover - unexpected errors bubble up as 500
+    except (RuntimeError, OSError) as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
@@ -27,7 +27,7 @@ async def pause_focus_stacking(project_name: str, scan_index: int) -> Task:
         task = await focus_service.pause_focus_stacking(project_name, scan_index)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except Exception as exc:  # pragma: no cover - unexpected errors bubble up as 500
+    except (RuntimeError, OSError) as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     if task is None:
@@ -43,7 +43,7 @@ async def resume_focus_stacking(project_name: str, scan_index: int) -> Task:
         task = await focus_service.resume_focus_stacking(project_name, scan_index)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except Exception as exc:  # pragma: no cover - unexpected errors bubble up as 500
+    except (RuntimeError, OSError) as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     if task is None:
@@ -59,7 +59,7 @@ async def cancel_focus_stacking(project_name: str, scan_index: int) -> Task:
         task = await focus_service.cancel_focus_stacking(project_name, scan_index)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except Exception as exc:  # pragma: no cover - unexpected errors bubble up as 500
+    except (RuntimeError, OSError) as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     if task is None:

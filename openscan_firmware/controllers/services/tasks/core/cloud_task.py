@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import time
@@ -189,7 +190,7 @@ class CloudDownloadTask(BaseTask):
 
             try:
                 download_info = await asyncio.to_thread(get_project_info, remote_name, token)
-            except Exception as exc:  # noqa: BLE001
+            except (OSError, requests.exceptions.RequestException, ValueError, json.JSONDecodeError) as exc:
                 logger.warning(
                     "[%s] Failed to fetch project info on attempt %s: %s",
                     self.id,
@@ -275,7 +276,7 @@ class CloudDownloadTask(BaseTask):
 
         try:
             url = _select_download_url(dlink, download_info)
-        except Exception as exc:  # noqa: BLE001
+        except (KeyError, ValueError, TypeError) as exc:
             logger.warning(
                 "[%s] Failed to derive direct download link from %s: %s. Falling back to original link.",
                 self.id,
@@ -321,10 +322,10 @@ class CloudDownloadTask(BaseTask):
                         total_for_progress,
                         f"Downloading archive ({downloaded}/{total_for_progress} bytes)",
                     )
-        except Exception:
+        except (OSError, requests.exceptions.RequestException, CloudServiceError) as exc:
             temp_path.unlink(missing_ok=True)
             response.close()
-            raise
+            raise exc
         finally:
             response.close()
 

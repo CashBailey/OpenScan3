@@ -1,6 +1,5 @@
 from datetime import datetime
 from time import time
-from dataclasses import field
 from typing import Optional
 
 from pydantic import BaseModel, Field, model_validator
@@ -31,7 +30,7 @@ class Scan(BaseModel):
 
     current_step: int = 0
     system_message: Optional[str] = None
-    last_updated: datetime = field(default_factory=datetime.now)
+    last_updated: datetime = Field(default_factory=datetime.now)
 
     description: Optional[str] = None
 

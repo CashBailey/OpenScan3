@@ -73,7 +73,7 @@ def setup_logging(preferred_filename: str | None = None, default_level=logging.I
     # Ensure logs directory exists (best-effort)
     try:
         Path(DEFAULT_LOGS_PATH).mkdir(parents=True, exist_ok=True)
-    except Exception as e:
+    except OSError as e:
         logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
         logging.warning(f"Could not create log directory {DEFAULT_LOGS_PATH}: {e}. Using basicConfig.")
 
@@ -94,7 +94,7 @@ def setup_logging(preferred_filename: str | None = None, default_level=logging.I
             logging.config.dictConfig(config_dict)
             logging.getLogger(__name__).info("Logging configured from %s", preferred_filename or "default_logging.json")
             return
-        except Exception as e:
+        except (ValueError, TypeError, KeyError, OSError) as e:
             logging.basicConfig(level=default_level, format="%(levelname)s: %(message)s")
             logging.error("Error applying logging config: %s. Falling back to basicConfig.", e, exc_info=True)
             return
@@ -119,7 +119,7 @@ def flush_memory_handlers():
                 # Only flush MemoryHandler to force write-through to targets
                 if isinstance(handler, logging.handlers.MemoryHandler):
                     handler.flush()
-            except Exception:
+            except (OSError, ValueError, RuntimeError):
                 # Use a local logger to avoid recursion on failures
                 logging.getLogger(__name__).exception("Failed to flush handler %r", handler)
 

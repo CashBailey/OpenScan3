@@ -64,8 +64,10 @@ async def move_motor_to_angle(motor_name: str, degrees: float):
     Returns:
         MotorStatusResponse: A response object containing the status of the motor after the move
     """
-
-    controller = get_motor_controller(motor_name)
+    try:
+        controller = get_motor_controller(motor_name)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     await controller.move_to(degrees)
     return controller.get_status()
 
@@ -81,7 +83,10 @@ async def move_motor_by_degree(motor_name: str, degrees: float = Body(embed=True
     Returns:
         MotorStatusResponse: A response object containing the status of the motor after the move
     """
-    controller = get_motor_controller(motor_name)
+    try:
+        controller = get_motor_controller(motor_name)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     await controller.move_degrees(degrees)
     return controller.get_status()
 
@@ -98,7 +103,10 @@ async def move_motor_to_home_position(motor_name: str):
     Returns:
         MotorStatusResponse: A response object containing the status of the motor after the move
     """
-    controller = get_motor_controller(motor_name)
+    try:
+        controller = get_motor_controller(motor_name)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     if controller.endstop and not controller.is_busy():
         # Trigger Endstop
         controller.model.angle = 0

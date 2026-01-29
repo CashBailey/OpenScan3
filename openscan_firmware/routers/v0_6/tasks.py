@@ -1,9 +1,11 @@
 from typing import List, Any, Dict
+import os
 
-from fastapi import APIRouter, HTTPException, status, Body
+from fastapi import APIRouter, Depends, HTTPException, status, Body
 
 from openscan_firmware.controllers.services.tasks.task_manager import get_task_manager
 from openscan_firmware.models.task import Task, TaskStatus
+from openscan_firmware.security import require_admin
 
 
 router = APIRouter(
@@ -11,6 +13,17 @@ router = APIRouter(
     tags=["tasks"],
     responses={404: {"description": "Not found"}},
 )
+
+
+_ALLOWED_TASKS_ENV = "OPENSCAN_ALLOWED_TASKS"
+
+
+def _is_task_allowed(task_name: str) -> bool:
+    configured = os.getenv(_ALLOWED_TASKS_ENV)
+    if configured is None:
+        return True
+    allowed = {name.strip() for name in configured.split(",") if name.strip()}
+    return task_name in allowed
 
 
 @router.get("/", response_model=List[Task])
@@ -76,8 +89,6 @@ async def pause_task(task_id: str):
     task = await task_manager.pause_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail=f"Task {task_id} not found or cannot be paused.")
-    if task.status not in [TaskStatus.PAUSED, TaskStatus.RUNNING]:
-        pass
     return task
 
 
@@ -96,8 +107,6 @@ async def resume_task(task_id: str):
     task = await task_manager.resume_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail=f"Task {task_id} not found or cannot be resumed.")
-    if task.status not in [TaskStatus.RUNNING, TaskStatus.PAUSED]:
-        pass
     return task
 
 
@@ -105,7 +114,8 @@ async def resume_task(task_id: str):
 async def create_task(
     task_name: str,
     args: List[Any] = Body(default=[], description="Positional arguments for the task"),
-    kwargs: Dict[str, Any] = Body(default={}, description="Keyword arguments for the task")
+    kwargs: Dict[str, Any] = Body(default={}, description="Keyword arguments for the task"),
+    _admin: None = Depends(require_admin),
 ):
     """
     Create and start a new background task with optional parameters.
@@ -145,6 +155,8 @@ async def create_task(
         ```
     """
     try:
+        if not _is_task_allowed(task_name):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Task is not allowed.")
         task_manager = get_task_manager()
         task = await task_manager.create_and_run_task(task_name, *args, **kwargs)
         return task

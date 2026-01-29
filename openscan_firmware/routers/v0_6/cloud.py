@@ -6,7 +6,7 @@ import asyncio
 import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from openscan_firmware.config.cloud import CloudSettings, set_cloud_settings
@@ -23,6 +23,7 @@ from openscan_firmware.controllers.services.projects import get_project_manager,
 from openscan_firmware.controllers.services.tasks.task_manager import get_task_manager
 from openscan_firmware.models.project import Project
 from openscan_firmware.models.task import Task
+from openscan_firmware.security import require_admin
 
 router = APIRouter(
     prefix="/cloud",
@@ -67,7 +68,7 @@ async def _fetch_remote_info(remote_name: str) -> tuple[dict[str, Any] | None, s
         return data, None
     except CloudServiceError as exc:  # pragma: no cover - exercised in error test
         return None, str(exc)
-    except Exception as exc:  # pragma: no cover - defensive logging
+    except (OSError, RuntimeError, TimeoutError) as exc:  # pragma: no cover - defensive logging
         logger.exception("Failed to fetch remote project info for %s", remote_name)
         return None, str(exc)
 
@@ -158,7 +159,7 @@ async def get_cloud_status() -> CloudStatusResponse:
         status = await asyncio.to_thread(cloud_service.get_status)
     except CloudServiceError as exc:
         messages.append(f"Status unavailable: {exc}")
-    except Exception as exc:  # pragma: no cover - defensive logging
+    except (OSError, RuntimeError, TimeoutError) as exc:  # pragma: no cover - defensive logging
         logger.exception("Cloud status request failed")
         messages.append(f"Status request failed: {exc}")
 
@@ -166,7 +167,7 @@ async def get_cloud_status() -> CloudStatusResponse:
         token_info = await asyncio.to_thread(cloud_service.get_token_info)
     except CloudServiceError as exc:
         messages.append(f"Token info unavailable: {exc}")
-    except Exception as exc:  # pragma: no cover - defensive logging
+    except (OSError, RuntimeError, TimeoutError) as exc:  # pragma: no cover - defensive logging
         logger.exception("Token info request failed")
         messages.append(f"Token info request failed: {exc}")
 
@@ -174,7 +175,7 @@ async def get_cloud_status() -> CloudStatusResponse:
         queue_estimate = await asyncio.to_thread(cloud_service.get_queue_estimate)
     except CloudServiceError as exc:
         messages.append(f"Queue estimate unavailable: {exc}")
-    except Exception as exc:  # pragma: no cover - defensive logging
+    except (OSError, RuntimeError, TimeoutError) as exc:  # pragma: no cover - defensive logging
         logger.exception("Queue estimate request failed")
         messages.append(f"Queue estimate request failed: {exc}")
 
@@ -199,7 +200,9 @@ async def get_cloud_settings() -> CloudSettingsResponse:
 
 
 @router.post("/settings", response_model=CloudSettingsResponse)
-async def update_cloud_settings(new_settings: CloudSettings) -> CloudSettingsResponse:
+async def update_cloud_settings(
+    new_settings: CloudSettings, _admin: None = Depends(require_admin)
+) -> CloudSettingsResponse:
     """Persist and activate new cloud settings.
 
     Args:
@@ -253,7 +256,9 @@ async def get_cloud_project(project_name: str) -> CloudProjectStatus:
 
 
 @router.delete("/projects/{project_name}")
-async def reset_cloud_project(project_name: str) -> dict[str, Any]:
+async def reset_cloud_project(
+    project_name: str, _admin: None = Depends(require_admin)
+) -> dict[str, Any]:
     """Reset the remote project and clear the local linkage.
 
     Args:

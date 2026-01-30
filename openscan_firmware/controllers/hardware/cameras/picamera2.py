@@ -22,6 +22,7 @@ from picamera2 import Picamera2
 from openscan_firmware.controllers.hardware.cameras.camera import CameraController
 from openscan_firmware.models.camera import Camera, CameraMetadata, PhotoData
 from openscan_firmware.config.camera import CameraSettings
+from openscan_firmware.utils.photos.exif import build_camera_intrinsics_exif
 
 logger = logging.getLogger(__name__)
 
@@ -522,6 +523,20 @@ class Picamera2Controller(CameraController):
                     piexif.ImageIFD.Software: "OpenScan3 (Picamera2)",
                 }
             }
+
+            # Build camera intrinsics EXIF (focal length, dimensions)
+            try:
+                intrinsics_exif = build_camera_intrinsics_exif(
+                    camera_name=self.camera.name,
+                    image_width=self.photo_config["main"]["size"][0],
+                    image_height=self.photo_config["main"]["size"][1],
+                )
+
+                if intrinsics_exif and "Exif" in intrinsics_exif:
+                    exif_data.setdefault("Exif", {})
+                    exif_data["Exif"].update(intrinsics_exif["Exif"])
+            except Exception as exc:
+                logger.warning("Failed to build camera intrinsics EXIF: %s", exc)
 
             if optional_exif_data:
                 exif_data.update(optional_exif_data)
